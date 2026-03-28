@@ -15,6 +15,10 @@
 
 # Introduction
 
+## 界面预览
+
+![NSSM Plus Screenshot](screencap1.png)
+
 ## 功能特性
 
 - **原生 GUI** - 直接双击打开，无需命令行启动
@@ -359,7 +363,7 @@ err := wails.Run(&options.App{
 - [ ] **崩溃重启** - `RestartDelay` / `RestartTimeout` 字段已定义，需实现进程监控和自动重启
 - [ ] **环境变量注入** - `Environment` 字段已定义，需在启动子进程时设置
 - [ ] **工作目录** - `WorkDir` 字段已定义，需在启动时设置 `cwd`
-- [ ] **原生文件对话框** - 替换当前的 `prompt()` / `<input type="file">`，使用 Wails 的 `runtime.OpenFileDialog`
+- [x] **原生文件对话框** - 使用 Wails 的 `runtime.SaveFileDialog` / `runtime.OpenFileDialog` 替代浏览器弹窗
 - [ ] **服务重命名** - 当前 `Modify` 不支持更改服务名称
 - [ ] **多语言支持 (i18n)** - UI 文本硬编码为中文/英文混合
 - [ ] **系统托盘** - 最小化到系统托盘，后台运行
