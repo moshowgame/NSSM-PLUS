@@ -1,0 +1,20 @@
+{
+  "serviceName": "MyAppService",
+  "displayName": "My Application Service",
+  "description": "A sample service configuration for NSSM Plus",
+  "appPath": "C:\\path\\to\\app.exe",
+  "arguments": "--port 8080",
+  "workDir": "C:\\path\\to\\app",
+  "startType": "auto",
+  "account": "",
+  "password": "",
+  "environment": {
+    "APP_ENV": "production"
+  },
+  "logStdout": "C:\\logs\\myapp-stdout.log",
+  "logStderr": "C:\\logs\\myapp-stderr.log",
+  "rotateLog": true,
+  "restartDelay": 5,
+  "restartTimeout": 30,
+  "dependencies": []
+}

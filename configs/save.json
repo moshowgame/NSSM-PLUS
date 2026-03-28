@@ -1,0 +1,18 @@
+{
+  "serviceName": "2222",
+  "displayName": "2222",
+  "description": "2222",
+  "appPath": "2222",
+  "arguments": "222",
+  "workDir": "222",
+  "startType": "auto",
+  "account": "",
+  "password": "",
+  "environment": {},
+  "logStdout": "",
+  "logStderr": "",
+  "rotateLog": false,
+  "restartDelay": 0,
+  "restartTimeout": 30,
+  "dependencies": []
+}
