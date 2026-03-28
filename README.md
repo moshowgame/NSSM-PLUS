@@ -247,6 +247,7 @@ npm run dev
 7. **Uninstall** 卸载服务，**Delete** 仅清空当前表单
 8. 点击 **Save Config** 将所有已管理服务保存到一份 JSON 文件
 9. 点击 **Debug** 输出调试信息到控制台（按 F12 查看）
+10. 需要始终对 AppPath 加引号，防止 SCM 对整个字符串加引号。
 
 配置文件示例参见 [`configs/example.json`](configs/example.json)。
 

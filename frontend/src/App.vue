@@ -96,7 +96,7 @@
             <div class="form-group full-width">
               <label>Application Path *</label>
               <textarea v-model="config.appPath" rows="2" placeholder="C:\Program Files\Java\jdk-17\bin\java.exe"></textarea>
-              <span class="field-hint">Full path to the executable. Use quotes if path contains spaces, e.g. "C:\Program Files\Java\bin\java.exe"</span>
+              <span class="field-hint">Full path to the executable (java.exe, node.exe, etc.). Quotes are added automatically.</span>
             </div>
             <div class="form-group full-width">
               <label>Arguments</label>

@@ -3,7 +3,10 @@ package service
 import (
 	"fmt"
 	"strings"
+	"syscall"
 	"time"
+	"unicode/utf16"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/svc"
@@ -106,33 +109,41 @@ func (m *Manager) Install(cfg ServiceConfig) error {
 		return fmt.Errorf("service '%s' already exists. Use Modify to update it", cfg.ServiceName)
 	}
 
-	// Build binary path from AppPath + Arguments, no automatic quoting
+	// Build binary path: simple concatenation, no automatic quoting or escaping.
+	// Bypass mgr.CreateService to avoid syscall.EscapeArg mangling the path.
 	binaryPath := strings.TrimSpace(cfg.AppPath)
 	args := strings.TrimSpace(cfg.Arguments)
 	if args != "" {
 		binaryPath = binaryPath + " " + args
 	}
 
-	// Create service
-	s, err := scMgr.CreateService(
-		cfg.ServiceName,
-		binaryPath,
-		mgr.Config{
-			ServiceType:      windows.SERVICE_WIN32_OWN_PROCESS,
-			StartType:        toMgrStartType(cfg.StartType),
-			ErrorControl:     windows.SERVICE_ERROR_NORMAL,
-			BinaryPathName:   binaryPath,
-			DisplayName:      cfg.DisplayName,
-			Description:      buildDescription(cfg.Description, cfg.AppPath),
-			ServiceStartName: cfg.Account,
-			Password:         cfg.Password,
-			Dependencies:     cfg.Dependencies,
-		},
+	// Create service via windows.CreateService directly
+	desc := buildDescription(cfg.Description, cfg.AppPath)
+	h, err := windows.CreateService(
+		scMgr.Handle,
+		syscall.StringToUTF16Ptr(cfg.ServiceName),
+		syscall.StringToUTF16Ptr(cfg.DisplayName),
+		windows.SERVICE_ALL_ACCESS,
+		windows.SERVICE_WIN32_OWN_PROCESS,
+		toMgrStartType(cfg.StartType),
+		windows.SERVICE_ERROR_NORMAL,
+		syscall.StringToUTF16Ptr(binaryPath),
+		nil, // loadOrderGroup
+		nil, // tagId
+		toStringBlock(cfg.Dependencies),
+		syscall.StringToUTF16Ptr(cfg.Account),
+		syscall.StringToUTF16Ptr(cfg.Password),
 	)
 	if err != nil {
 		return fmt.Errorf("failed to create service: %w", err)
 	}
-	defer s.Close()
+	defer windows.CloseServiceHandle(h)
+
+	// Update description via ChangeServiceConfig2
+	if desc != "" {
+		d := windows.SERVICE_DESCRIPTION{Description: syscall.StringToUTF16Ptr(desc)}
+		windows.ChangeServiceConfig2(h, windows.SERVICE_CONFIG_DESCRIPTION, (*byte)(unsafe.Pointer(&d)))
+	}
 
 	return nil
 }
@@ -335,7 +346,8 @@ func (m *Manager) Modify(oldName string, cfg ServiceConfig) error {
 	}
 	defer s.Close()
 
-	// Build binary path: always quote the executable path, then append arguments
+	// Build binary path: UpdateConfig passes BinaryPathName directly to ChangeServiceConfigW,
+	// no syscall.EscapeArg involved, so just concatenate appPath + args.
 	binaryPath := strings.TrimSpace(cfg.AppPath)
 	args := strings.TrimSpace(cfg.Arguments)
 	if args != "" {
@@ -537,4 +549,23 @@ func parseBinaryPathName(binaryPathName string) (appPath string, arguments strin
 		return binaryPathName[:idx], strings.TrimSpace(binaryPathName[idx+1:])
 	}
 	return binaryPathName, ""
+}
+
+// toStringBlock converts a string slice to a null-terminated multi-string block
+// (required by Windows service APIs for dependencies).
+func toStringBlock(ss []string) *uint16 {
+	if len(ss) == 0 {
+		return nil
+	}
+	t := ""
+	for _, s := range ss {
+		if s != "" {
+			t += s + "\x00"
+		}
+	}
+	if t == "" {
+		return nil
+	}
+	t += "\x00"
+	return &utf16.Encode([]rune(t))[0]
 }
