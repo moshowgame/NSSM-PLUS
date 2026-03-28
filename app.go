@@ -5,7 +5,11 @@ import (
 	"fmt"
 	"nssm-plus/internal/config"
 	"nssm-plus/internal/service"
+	"os/exec"
 	"sync"
+	"syscall"
+
+	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 type App struct {
@@ -85,20 +89,33 @@ func (a *App) GetServiceConfig(serviceName string) (*service.ServiceConfig, erro
 	return a.mgr.GetServiceConfig(serviceName)
 }
 
-// --- Config File Operations ---
+// --- File Dialog Operations (via Wails Go runtime) ---
 
-// SaveConfigToFile saves a service configuration to a JSON file
-func (a *App) SaveConfigToFile(filePath string, cfg service.ServiceConfig) error {
-	return a.config.SaveToFile(filePath, cfg)
+// ShowSaveDialog opens a native Save File dialog and returns the selected path
+func (a *App) ShowSaveDialog(title string, defaultFilename string) (string, error) {
+	return runtime.SaveFileDialog(a.ctx, runtime.SaveDialogOptions{
+		Title:           title,
+		DefaultFilename: defaultFilename,
+		Filters: []runtime.FileFilter{
+			{DisplayName: "JSON Files (*.json)", Pattern: "*.json"},
+		},
+	})
 }
 
-// LoadConfigFromFile loads a service configuration from a JSON file
-func (a *App) LoadConfigFromFile(filePath string) (*service.ServiceConfig, error) {
-	return a.config.LoadFromFile(filePath)
+// ShowOpenDialog opens a native Open File dialog and returns the selected path
+func (a *App) ShowOpenDialog(title string) (string, error) {
+	return runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
+		Title: title,
+		Filters: []runtime.FileFilter{
+			{DisplayName: "JSON Files (*.json)", Pattern: "*.json"},
+		},
+	})
 }
 
-// ExportAllConfigs exports all service configs to a single JSON file
-func (a *App) ExportAllConfigs(filePath string) error {
+// --- Config File Operations (multi-service) ---
+
+// SaveConfigToFile saves all managed services to a multi-service JSON file
+func (a *App) SaveConfigToFile(filePath string) error {
 	services, err := a.mgr.ListServices()
 	if err != nil {
 		return fmt.Errorf("failed to list services: %w", err)
@@ -111,12 +128,20 @@ func (a *App) ExportAllConfigs(filePath string) error {
 		}
 		configs = append(configs, *cfg)
 	}
-	return a.config.ExportAll(filePath, configs)
+	return a.config.SaveToFile(filePath, configs)
 }
 
-// ImportConfigs imports service configs from a JSON file
-func (a *App) ImportConfigs(filePath string) ([]service.ServiceConfig, error) {
-	return a.config.ImportConfigs(filePath)
+// LoadConfigFromFile loads service configs from a multi-service JSON file
+func (a *App) LoadConfigFromFile(filePath string) ([]service.ServiceConfig, error) {
+	return a.config.LoadFromFile(filePath)
 }
 
-
+// OpenInExplorer opens Windows File Explorer and selects the specified file
+func (a *App) OpenInExplorer(filePath string) error {
+	if filePath == "" {
+		return fmt.Errorf("no file path specified")
+	}
+	cmd := exec.Command("explorer.exe", "/select,"+filePath)
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	return cmd.Start()
+}

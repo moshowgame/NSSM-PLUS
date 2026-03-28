@@ -1,20 +1,42 @@
 {
-  "serviceName": "MyAppService",
-  "displayName": "My Application Service",
-  "description": "A sample service configuration for NSSM Plus",
-  "appPath": "C:\\path\\to\\app.exe",
-  "arguments": "--port 8080",
-  "workDir": "C:\\path\\to\\app",
-  "startType": "auto",
-  "account": "",
-  "password": "",
-  "environment": {
-    "APP_ENV": "production"
-  },
-  "logStdout": "C:\\logs\\myapp-stdout.log",
-  "logStderr": "C:\\logs\\myapp-stderr.log",
-  "rotateLog": true,
-  "restartDelay": 5,
-  "restartTimeout": 30,
-  "dependencies": []
+  "services": [
+    {
+      "serviceName": "MyAppService",
+      "displayName": "My Application Service",
+      "description": "A sample service configuration for NSSM Plus",
+      "appPath": "C:\\path\\to\\app.exe",
+      "arguments": "--port 8080",
+      "workDir": "C:\\path\\to\\app",
+      "startType": "auto",
+      "account": "",
+      "password": "",
+      "environment": {
+        "APP_ENV": "production"
+      },
+      "logStdout": "C:\\logs\\myapp-stdout.log",
+      "logStderr": "C:\\logs\\myapp-stderr.log",
+      "rotateLog": true,
+      "restartDelay": 5,
+      "restartTimeout": 30,
+      "dependencies": []
+    },
+    {
+      "serviceName": "AnotherService",
+      "displayName": "Another Application",
+      "description": "Second service in the same config file",
+      "appPath": "C:\\path\\to\\another.exe",
+      "arguments": "",
+      "workDir": "",
+      "startType": "demand",
+      "account": "",
+      "password": "",
+      "environment": {},
+      "logStdout": "",
+      "logStderr": "",
+      "rotateLog": false,
+      "restartDelay": 0,
+      "restartTimeout": 30,
+      "dependencies": []
+    }
+  ]
 }

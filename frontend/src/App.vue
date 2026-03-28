@@ -4,15 +4,17 @@
     <header class="app-header">
       <div class="header-left">
         <h1 class="app-title">NSSM Plus</h1>
-        <span class="app-subtitle">Windows Service Manager</span>
+        <span class="app-subtitle">Windows Non-Stucking Service Manager Plus - by Moshow</span>
       </div>
       <div class="header-actions">
-        <button class="btn-secondary" @click="exportAll" :disabled="services.length === 0">
-          <span class="icon">&#x1F4BE;</span> Export All
-        </button>
-        <button class="btn-secondary" @click="importConfigs">
-          <span class="icon">&#x1F4C2;</span> Import
-        </button>
+        <template v-if="configFilePath">
+          <span class="config-file-label" :title="configFilePath">
+            &#x1F4C4; {{ configFilePath.split(/[\\/]/).pop() }}
+          </span>
+          <button class="btn-sm btn-secondary" @click="openInExplorer" title="Open in File Explorer">
+            &#x1F4C2;
+          </button>
+        </template>
       </div>
     </header>
 
@@ -20,18 +22,21 @@
       <!-- Sidebar: Service List -->
       <aside class="sidebar">
         <div class="sidebar-header">
-          <span>Services</span>
+          <span>Services ({{ displayServices.length }})</span>
           <button class="btn-sm btn-primary" @click="refreshServices">Refresh</button>
         </div>
-        <div class="service-list" v-if="services.length > 0">
+        <div class="service-list" v-if="displayServices.length > 0">
           <div
-            v-for="svc in services"
-            :key="svc.name"
+            v-for="svc in displayServices"
+            :key="svc.name + '-' + svc.source"
             class="service-item"
             :class="{ active: selectedService === svc.name }"
             @click="selectService(svc)"
           >
-            <div class="service-item-name">{{ svc.displayName || svc.name }}</div>
+            <div class="service-item-name">
+              {{ svc.displayName || svc.name }}
+              <span v-if="svc.source === 'file'" class="source-badge">File</span>
+            </div>
             <div class="service-item-meta">
               <span class="status-badge" :class="statusClass(svc.status)">{{ svc.status }}</span>
               <span class="start-type">{{ svc.startType }}</span>
@@ -40,7 +45,7 @@
         </div>
         <div v-else class="empty-state">
           <p>No services managed by NSSM Plus</p>
-          <p class="hint">Install a new service using the form</p>
+          <p class="hint">Install a new service or load a config file</p>
         </div>
       </aside>
 
@@ -88,20 +93,20 @@
           <h2 class="section-title">Startup</h2>
           <div class="form-grid">
             <div class="form-group">
-              <label>Start Type</label>
-              <select v-model="config.startType">
-                <option value="auto">Automatic</option>
-                <option value="demand">Manual</option>
-                <option value="disabled">Disabled</option>
-              </select>
-            </div>
-            <div class="form-group">
               <label>Account</label>
               <input v-model="config.account" placeholder="LocalSystem (default)" />
             </div>
             <div class="form-group">
               <label>Password</label>
               <input v-model="config.password" type="password" placeholder="Leave empty for LocalSystem" />
+            </div>
+            <div class="form-group">
+              <label>Start Type</label>
+              <select v-model="config.startType">
+                <option value="auto">Automatic</option>
+                <option value="demand">Manual</option>
+                <option value="disabled">Disabled</option>
+              </select>
             </div>
           </div>
         </div>
@@ -146,29 +151,29 @@
     <footer class="action-bar">
       <div class="action-left">
         <button class="btn-secondary" @click="newConfig">
-          <span class="icon">+</span> New
-        </button>
-        <button class="btn-secondary" @click="saveConfig">
-          <span class="icon">&#x1F4BE;</span> Save Config
+          <span class="icon">+</span> Service
         </button>
         <button class="btn-secondary" @click="loadConfig">
-          <span class="icon">&#x1F4C2;</span> Load Config
+          <span class="icon">&#x1F4C2;</span> Open Config
+        </button>
+        <button class="btn-secondary" @click="saveConfig" :disabled="services.length === 0">
+          <span class="icon">&#x1F4BE;</span> Save Config
         </button>
       </div>
       <div class="action-right">
         <button class="btn-primary" @click="installService" :disabled="!config.serviceName || !config.appPath">
           {{ isEditing ? 'Apply Changes' : 'Install Service' }}
         </button>
-        <button class="btn-success" @click="startService" :disabled="!config.serviceName">
+        <button class="btn-success" @click="startService" :disabled="!isEditing || selectedServiceSource !== 'installed'">
           Start
         </button>
-        <button class="btn-warning" @click="stopService" :disabled="!config.serviceName">
+        <button class="btn-warning" @click="stopService" :disabled="!isEditing || selectedServiceSource !== 'installed'">
           Stop
         </button>
-        <button class="btn-secondary" @click="restartService" :disabled="!config.serviceName">
+        <button class="btn-secondary" @click="restartService" :disabled="!isEditing || selectedServiceSource !== 'installed'">
           Restart
         </button>
-        <button class="btn-danger" @click="removeService" :disabled="!config.serviceName || !isEditing">
+        <button class="btn-danger" @click="removeService" :disabled="!isEditing || selectedServiceSource !== 'installed'">
           Remove
         </button>
       </div>
@@ -195,15 +200,46 @@
 </template>
 
 <script>
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted } from 'vue'
 
 export default {
   name: 'App',
   setup() {
     // State
-    const services = ref([])
+    const services = ref([])           // installed services from Windows SCM
+    const loadedServices = ref([])     // services loaded from config file
+    const configFilePath = ref('')     // currently loaded config file path
     const selectedService = ref('')
+    const selectedServiceSource = ref('') // 'installed' or 'file'
     const isEditing = ref(false)
+
+    // Merged service list for sidebar display
+    const displayServices = computed(() => {
+      const result = []
+      // Installed services first
+      for (const svc of services.value) {
+        result.push({
+          name: svc.name,
+          displayName: svc.displayName,
+          status: svc.status,
+          startType: svc.startType,
+          source: 'installed',
+        })
+      }
+      // Loaded but not-yet-installed services
+      for (const ls of loadedServices.value) {
+        if (!services.value.some(s => s.name === ls.serviceName)) {
+          result.push({
+            name: ls.serviceName,
+            displayName: ls.displayName || ls.serviceName,
+            status: 'Not Installed',
+            startType: ls.startType || '-',
+            source: 'file',
+          })
+        }
+      }
+      return result
+    })
 
     const defaultConfig = () => ({
       serviceName: '',
@@ -240,7 +276,6 @@ export default {
       if (window.go) {
         return window.go.main.App[method](...args)
       }
-      // Dev mode fallback
       return Promise.reject(new Error('Wails runtime not available'))
     }
 
@@ -275,20 +310,32 @@ export default {
 
     function selectService(svc) {
       selectedService.value = svc.name
+      selectedServiceSource.value = svc.source
       isEditing.value = true
-      call('GetServiceConfig', svc.name).then(cfg => {
-        if (cfg) {
-          Object.assign(config, cfg)
+
+      if (svc.source === 'file') {
+        // Load config from local loadedServices cache
+        const cached = loadedServices.value.find(s => s.serviceName === svc.name)
+        if (cached) {
+          Object.assign(config, cached)
         }
-      }).catch(e => {
-        showToast('Failed to load service config: ' + e.message, 'error')
-      })
+      } else {
+        // Load config from Windows SCM
+        call('GetServiceConfig', svc.name).then(cfg => {
+          if (cfg) {
+            Object.assign(config, cfg)
+          }
+        }).catch(e => {
+          showToast('Failed to load service config: ' + e.message, 'error')
+        })
+      }
     }
 
     function statusClass(status) {
       switch (status) {
         case 'Running': return 'status-running'
         case 'Stopped': return 'status-stopped'
+        case 'Not Installed': return 'status-file'
         default: return 'status-other'
       }
     }
@@ -299,7 +346,7 @@ export default {
         return
       }
       try {
-        if (isEditing.value) {
+        if (isEditing.value && selectedServiceSource.value === 'installed') {
           const oldName = selectedService.value || config.serviceName
           await call('ModifyService', oldName, JSON.parse(JSON.stringify(config)))
           showToast('Service updated successfully', 'success')
@@ -309,6 +356,7 @@ export default {
         }
         await refreshServices()
         selectedService.value = config.serviceName
+        selectedServiceSource.value = 'installed'
         isEditing.value = true
       } catch (e) {
         showToast('Failed: ' + e.message, 'error')
@@ -370,83 +418,53 @@ export default {
     function newConfig() {
       Object.assign(config, defaultConfig())
       selectedService.value = ''
+      selectedServiceSource.value = ''
       isEditing.value = false
     }
 
-    // --- Native file dialog helpers ---
-    async function saveFileDialog(title, defaultFilename) {
-      if (!window.runtime?.SaveFileDialog) {
-        return prompt(title, defaultFilename)
-      }
-      return window.runtime.SaveFileDialog({
-        Title: title,
-        DefaultFilename: defaultFilename || 'config.json',
-        Filters: [{ DisplayName: 'JSON Files (*.json)', Pattern: '*.json' }],
-      })
-    }
-
-    async function openFileDialog(title) {
-      if (!window.runtime?.OpenFileDialog) {
-        const path = prompt(title)
-        return path || ''
-      }
-      const result = await window.runtime.OpenFileDialog({
-        Title: title,
-        Filters: [{ DisplayName: 'JSON Files (*.json)', Pattern: '*.json' }],
-      })
-      return Array.isArray(result) ? result[0] : (result || '')
-    }
-
-    // --- Config file operations ---
+    // --- Config file operations (multi-service) ---
     async function saveConfig() {
-      const filePath = await saveFileDialog('Save Configuration', 'sample.json')
-      if (!filePath) return
       try {
-        await call('SaveConfigToFile', filePath, JSON.parse(JSON.stringify(config)))
-        showToast('Configuration saved to ' + filePath, 'success')
+        const defaultName = configFilePath.value ? configFilePath.value.split(/[\\/]/).pop() : 'services.json'
+        const filePath = await call('ShowSaveDialog', 'Save Config', defaultName)
+        if (!filePath) return
+        await call('SaveConfigToFile', filePath)
+        configFilePath.value = filePath
+        showToast(`Saved ${services.value.length} service(s) to ${filePath.split(/[\\/]/).pop()}`, 'success')
       } catch (e) {
         showToast('Failed to save: ' + e.message, 'error')
       }
     }
 
     async function loadConfig() {
-      const filePath = await openFileDialog('Load Configuration')
-      if (!filePath) return
       try {
-        const cfg = await call('LoadConfigFromFile', filePath)
-        if (cfg) {
-          Object.assign(config, cfg)
-          isEditing.value = false
-          showToast('Configuration loaded', 'success')
+        const filePath = await call('ShowOpenDialog', 'Open Config File')
+        if (!filePath) return
+        const configs = await call('LoadConfigFromFile', filePath)
+        if (!configs || configs.length === 0) {
+          showToast('No service configurations found in file', 'warning')
+          return
         }
+        loadedServices.value = configs
+        configFilePath.value = filePath
+        // Populate form with first config
+        Object.assign(config, configs[0])
+        selectedService.value = configs[0].serviceName
+        selectedServiceSource.value = 'file'
+        isEditing.value = true
+        await refreshServices()
+        showToast(`Loaded ${configs.length} service(s) from ${filePath.split(/[\\/]/).pop()}`, 'success')
       } catch (e) {
         showToast('Failed to load: ' + e.message, 'error')
       }
     }
 
-    async function exportAll() {
-      const filePath = await saveFileDialog('Export All Configurations', 'all-services.json')
-      if (!filePath) return
+    async function openInExplorer() {
+      if (!configFilePath.value) return
       try {
-        await call('ExportAllConfigs', filePath)
-        showToast('All configurations exported to ' + filePath, 'success')
+        await call('OpenInExplorer', configFilePath.value)
       } catch (e) {
-        showToast('Failed to export: ' + e.message, 'error')
-      }
-    }
-
-    async function importConfigs() {
-      const filePath = await openFileDialog('Import Configurations')
-      if (!filePath) return
-      try {
-        const configs = await call('ImportConfigs', filePath)
-        showToast(`Imported ${configs ? configs.length : 0} configuration(s)`, 'success')
-        if (configs && configs.length > 0) {
-          Object.assign(config, configs[0])
-          isEditing.value = false
-        }
-      } catch (e) {
-        showToast('Failed to import: ' + e.message, 'error')
+        showToast('Failed to open: ' + e.message, 'error')
       }
     }
 
@@ -455,10 +473,12 @@ export default {
     })
 
     return {
-      services, config, selectedService, isEditing, toast, modal,
+      services, loadedServices, displayServices,
+      configFilePath, selectedService, selectedServiceSource,
+      config, isEditing, toast, modal,
       statusClass, refreshServices, selectService,
       installService, startService, stopService, restartService, removeService,
-      newConfig, saveConfig, loadConfig, exportAll, importConfigs,
+      newConfig, saveConfig, loadConfig, openInExplorer,
     }
   }
 }
@@ -503,6 +523,19 @@ export default {
 .header-actions {
   display: flex;
   gap: 8px;
+  align-items: center;
+}
+
+.config-file-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+  background: var(--bg-hover);
+  padding: 3px 10px;
+  border-radius: var(--radius);
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* Body */
@@ -561,6 +594,18 @@ export default {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.source-badge {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: rgba(33, 150, 243, 0.2);
+  color: var(--info, #2196F3);
 }
 
 .service-item-meta {
@@ -585,6 +630,11 @@ export default {
 .status-stopped {
   background: rgba(244, 67, 54, 0.2);
   color: var(--danger);
+}
+
+.status-file {
+  background: rgba(158, 158, 158, 0.2);
+  color: var(--text-muted);
 }
 
 .status-other {

@@ -24,7 +24,7 @@
 - **原生 GUI** - 直接双击打开，无需命令行启动
 - **单页面操作** - 左侧服务列表 + 右侧配置表单，无 Tab 切换
 - **完整服务管理** - 安装、修改、启动、停止、重启、删除服务
-- **配置导入/导出** - 单个/批量配置保存为 JSON 文件，跨机器迁移
+- **多服务配置文件** - 一份 JSON 文件统一管理多个服务配置，方便批量导入/导出
 - **服务状态监控** - 实时显示 Running / Stopped 等状态
 - **暗色主题** - 现代化深色 UI
 
@@ -152,6 +152,27 @@ type ServiceConfig struct {
 
 该结构体同时用于 JSON 配置文件存储和前后端数据传输。
 
+配置文件以多服务格式存储，一个 JSON 文件包含所有服务定义：
+
+```json
+{
+  "services": [
+    {
+      "serviceName": "MyAppService",
+      "appPath": "C:\\path\\to\\app.exe",
+      ...
+    },
+    {
+      "serviceName": "AnotherService",
+      "appPath": "C:\\path\\to\\another.exe",
+      ...
+    }
+  ]
+}
+```
+
+加载配置文件后，侧栏会合并显示已安装服务（带状态）和文件中的未安装服务（标记为 "Not Installed" + "File" 标签），可逐个点击查看并安装。向后兼容旧的单服务格式和裸数组格式。
+
 ## 环境要求
 
 - **操作系统**: Windows 10 / 11 (需要 WebView2 Runtime)
@@ -218,11 +239,11 @@ npm run dev
 ## 使用方法
 
 1. **以管理员身份运行** `nssm-plus.exe`
-2. 在右侧表单填写服务配置（服务名称和应用程序路径为必填项）
-3. 点击底部 **Install Service** 安装服务
-4. 使用 **Start / Stop / Restart** 控制服务运行
-5. 点击 **Save Config** 导出当前配置为 JSON 文件
-6. 通过 **Export All / Import** 批量导出/导入所有服务配置
+2. 点击 **Open Config** 加载多服务配置文件（或直接填写表单创建新服务）
+3. 侧栏会显示已安装服务和文件中未安装的服务（带 "File" 标签）
+4. 点击侧栏服务查看/编辑配置，点击 **Install Service** 安装
+5. 使用 **Start / Stop / Restart** 控制服务运行
+6. 点击 **Save Config** 将所有已管理服务保存到一份 JSON 文件
 
 配置文件示例参见 [`configs/example.json`](configs/example.json)。
 
@@ -281,13 +302,14 @@ const logs = await call('GetServiceLogs', serviceName)
 
 ```
 ┌──────────────────────────────────────────┐
-│ Header: 标题 + Export/Import 按钮        │
+│ Header: 标题 + 当前配置文件名             │
 ├──────────┬───────────────────────────────┤
 │ Sidebar  │  Main Content                 │
-│ 服务列表  │  配置表单（分 4 个 Section）    │
-│          │                               │
+│ 服务列表  │  配置表单（分 5 个 Section）    │
+│ (已安装+  │                               │
+│  已加载)  │                               │
 ├──────────┴───────────────────────────────┤
-│ Action Bar: New / Save / Load / 操作按钮  │
+│ Action Bar: New / Open / Save / 操作按钮  │
 └──────────────────────────────────────────┘
 ```
 
@@ -347,7 +369,7 @@ err := wails.Run(&options.App{
 |------|------|-----------|
 | 操作方式 | 命令行 `nssm.exe install` | GUI 界面直接操作 |
 | 配置界面 | Tab 页切换 (5+ 个 Tab) | 单页面，无需切换 |
-| 配置迁移 | 无内置支持 | JSON 导入/导出 |
+| 配置迁移 | 无内置支持 | 多服务 JSON 文件统一管理 |
 | 界面语言 | 英文 | 可扩展多语言 |
 | 服务包装 | Wrapper 二进制托管进程 | 直接指向目标程序 |
 | 日志重定向 | 支持 stdout/stderr 捕获 | 字段已预留（待实现） |
