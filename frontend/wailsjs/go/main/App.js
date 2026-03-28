@@ -38,8 +38,8 @@ export function RestartService(arg1) {
   return window['go']['main']['App']['RestartService'](arg1);
 }
 
-export function SaveConfigToFile(arg1) {
-  return window['go']['main']['App']['SaveConfigToFile'](arg1);
+export function SaveConfigToFile(arg1, arg2) {
+  return window['go']['main']['App']['SaveConfigToFile'](arg1, arg2);
 }
 
 export function ShowOpenDialog(arg1) {

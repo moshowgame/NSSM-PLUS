@@ -106,13 +106,12 @@ func (m *Manager) Install(cfg ServiceConfig) error {
 		return fmt.Errorf("service '%s' already exists. Use Modify to update it", cfg.ServiceName)
 	}
 
-	// Build binary path: AppPath contains the full command line (e.g. "java -server -jar app.jar")
-	binaryPath := cfg.AppPath
-	if cfg.Arguments != "" {
-		binaryPath = cfg.AppPath + " " + cfg.Arguments
+	// Build binary path from AppPath + Arguments, no automatic quoting
+	binaryPath := strings.TrimSpace(cfg.AppPath)
+	args := strings.TrimSpace(cfg.Arguments)
+	if args != "" {
+		binaryPath = binaryPath + " " + args
 	}
-	// Quote the executable part if it contains spaces
-	binaryPath = quoteExeInCmdLine(binaryPath)
 
 	// Create service
 	s, err := scMgr.CreateService(
@@ -336,13 +335,12 @@ func (m *Manager) Modify(oldName string, cfg ServiceConfig) error {
 	}
 	defer s.Close()
 
-	// Build binary path: AppPath contains the full command line (e.g. "java -server -jar app.jar")
-	binaryPath := cfg.AppPath
-	if cfg.Arguments != "" {
-		binaryPath = cfg.AppPath + " " + cfg.Arguments
+	// Build binary path: always quote the executable path, then append arguments
+	binaryPath := strings.TrimSpace(cfg.AppPath)
+	args := strings.TrimSpace(cfg.Arguments)
+	if args != "" {
+		binaryPath = binaryPath + " " + args
 	}
-	// Quote the executable part if it contains spaces
-	binaryPath = quoteExeInCmdLine(binaryPath)
 
 	err = s.UpdateConfig(mgr.Config{
 		ServiceType:      serviceNoChange,
@@ -385,10 +383,11 @@ func (m *Manager) GetServiceConfig(serviceName string) (*ServiceConfig, error) {
 		ServiceName: serviceName,
 		DisplayName: cfg.DisplayName,
 		Description: cleanDescription(cfg.Description),
-		AppPath:     stripOuterQuotes(cfg.BinaryPathName),
 		StartType:   startTypeToString(cfg.StartType),
 		Account:     cfg.ServiceStartName,
 	}
+	// Split BinaryPathName into AppPath and Arguments
+	result.AppPath, result.Arguments = parseBinaryPathName(cfg.BinaryPathName)
 
 	return result, nil
 }
@@ -450,9 +449,22 @@ func cleanDescription(description string) string {
 	return description
 }
 
-// quoteExeInCmdLine quotes the executable part of a command line if it contains spaces.
-// e.g. "C:\Program Files\app.exe --port 8080" -> "\"C:\Program Files\app.exe\" --port 8080"
-// e.g. "java -server -jar app.jar" -> "java -server -jar app.jar" (no change)
+// quoteExePath always wraps the executable path in double quotes for Windows SCM.
+// e.g. "java" -> "\"java\"", "C:\Program Files\app.exe" -> "\"C:\Program Files\app.exe\""
+// If the path is already quoted, it is returned as-is.
+func quoteExePath(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return ""
+	}
+	if strings.HasPrefix(path, `"`) && strings.HasSuffix(path, `"`) && len(path) >= 2 {
+		return path // already quoted
+	}
+	return `"` + path + `"`
+}
+
+// quoteExeInCmdLine quotes the executable part of a command line.
+// Kept for reference but no longer used in Install/Modify.
 func quoteExeInCmdLine(cmdLine string) string {
 	cmdLine = strings.TrimSpace(cmdLine)
 	if cmdLine == "" {

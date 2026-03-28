@@ -114,20 +114,9 @@ func (a *App) ShowOpenDialog(title string) (string, error) {
 
 // --- Config File Operations (multi-service) ---
 
-// SaveConfigToFile saves all managed services to a multi-service JSON file
-func (a *App) SaveConfigToFile(filePath string) error {
-	services, err := a.mgr.ListServices()
-	if err != nil {
-		return fmt.Errorf("failed to list services: %w", err)
-	}
-	configs := make([]service.ServiceConfig, 0, len(services))
-	for _, svc := range services {
-		cfg, err := a.mgr.GetServiceConfig(svc.Name)
-		if err != nil {
-			continue
-		}
-		configs = append(configs, *cfg)
-	}
+// SaveConfigToFile saves the given service configurations to a multi-service JSON file.
+// The configs are provided by the frontend and include the currently edited form state.
+func (a *App) SaveConfigToFile(filePath string, configs []service.ServiceConfig) error {
 	return a.config.SaveToFile(filePath, configs)
 }
 

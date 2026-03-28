@@ -20,7 +20,7 @@ export function RemoveService(arg1:string):Promise<void>;
 
 export function RestartService(arg1:string):Promise<void>;
 
-export function SaveConfigToFile(arg1:string):Promise<void>;
+export function SaveConfigToFile(arg1:string,arg2:Array<service.ServiceConfig>):Promise<void>;
 
 export function ShowOpenDialog(arg1:string):Promise<string>;
 

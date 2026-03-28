@@ -95,8 +95,13 @@
           <div class="form-grid">
             <div class="form-group full-width">
               <label>Application Path *</label>
-              <textarea v-model="config.appPath" rows="3" placeholder="java -server -jar D:\path\to\app.jar"></textarea>
-              <span class="field-hint">Full command line: executable path and arguments</span>
+              <textarea v-model="config.appPath" rows="2" placeholder="C:\Program Files\Java\jdk-17\bin\java.exe"></textarea>
+              <span class="field-hint">Full path to the executable. Use quotes if path contains spaces, e.g. "C:\Program Files\Java\bin\java.exe"</span>
+            </div>
+            <div class="form-group full-width">
+              <label>Arguments</label>
+              <textarea v-model="config.arguments" rows="4" placeholder="-server -jar D:\path\to\app.jar&#10;-Dspring.profiles.active=prod&#10;-Xms512m -Xmx2048m"></textarea>
+              <span class="field-hint">Command line arguments, one per line or space-separated</span>
             </div>
             <div class="form-group full-width">
               <label>Working Directory</label>
@@ -172,8 +177,11 @@
         <button class="btn-secondary" @click="loadConfig">
           <span class="icon">&#x1F4C2;</span> Open Config
         </button>
-        <button class="btn-secondary" @click="saveConfig" :disabled="services.length === 0">
+        <button class="btn-secondary" @click="saveConfig">
           <span class="icon">&#x1F4BE;</span> Save Config
+        </button>
+        <button class="btn-primary" @click="saveService" :disabled="!isEditing || !configFilePath">
+          <span class="icon">&#x1F4C4;</span> Save Service
         </button>
       </div>
       <div class="action-right">
@@ -332,10 +340,18 @@ export default {
     // Service operations
     async function refreshServices() {
       try {
-        const result = await call('GetInstalledServices')
-        services.value = result || []
+        if (configFilePath.value) {
+          // Config file is open: reload from JSON file
+          const configs = await call('LoadConfigFromFile', configFilePath.value)
+          loadedServices.value = configs || []
+          services.value = []
+        } else {
+          // No config file: refresh from Windows SCM
+          const result = await call('GetInstalledServices')
+          services.value = result || []
+        }
       } catch (e) {
-        showToast('Failed to load services: ' + errorMsg(e), 'error')
+        showToast('Failed to refresh: ' + errorMsg(e), 'error')
       }
     }
 
@@ -527,6 +543,9 @@ export default {
       selectedService.value = ''
       selectedServiceSource.value = ''
       isEditing.value = false
+      loadedServices.value = []
+      configFilePath.value = ''
+      services.value = []
     }
 
     async function checkService() {
@@ -546,11 +565,41 @@ export default {
         const defaultName = configFilePath.value ? configFilePath.value.split(/[\\/]/).pop() : 'services.json'
         const filePath = await call('ShowSaveDialog', 'Save Config', defaultName)
         if (!filePath) return
-        await call('SaveConfigToFile', filePath)
+        // Build config list: loadedServices + current form config (merged/replaced)
+        const current = JSON.parse(JSON.stringify(config))
+        const allConfigs = loadedServices.value
+          .filter(s => s.serviceName !== current.serviceName)
+        if (current.serviceName) {
+          allConfigs.unshift(current)
+        }
+        await call('SaveConfigToFile', filePath, allConfigs)
         configFilePath.value = filePath
-        showToast(`Saved ${services.value.length} service(s) to ${filePath.split(/[\\/]/).pop()}`, 'success')
+        showToast(`Saved ${allConfigs.length} service(s) to ${filePath.split(/[\\/]/).pop()}`, 'success')
       } catch (e) {
         showToast('Failed to save: ' + errorMsg(e), 'error')
+      }
+    }
+
+    async function saveService() {
+      if (!configFilePath.value) {
+        showToast('No config file loaded. Use "Save Config" to save to a new file.', 'warning')
+        return
+      }
+      if (!config.serviceName) {
+        showToast('Service name is required', 'warning')
+        return
+      }
+      try {
+        const current = JSON.parse(JSON.stringify(config))
+        const allConfigs = loadedServices.value
+          .filter(s => s.serviceName !== current.serviceName)
+        allConfigs.unshift(current)
+        await call('SaveConfigToFile', configFilePath.value, allConfigs)
+        // Also update loadedServices in memory
+        loadedServices.value = allConfigs
+        showToast(`Service "${current.serviceName}" saved to ${configFilePath.value.split(/[\\/]/).pop()}`, 'success')
+      } catch (e) {
+        showToast('Failed to save service: ' + errorMsg(e), 'error')
       }
     }
 
@@ -609,7 +658,7 @@ export default {
       config, isEditing, toast, modal,
       statusClass, refreshServices, selectService, copyService,
       installNewService, reconfigureService, startService, stopService, restartService, removeService,
-      newConfig, deleteConfig, checkService, saveConfig, loadConfig, openInExplorer, debugInfo,
+      newConfig, deleteConfig, checkService, saveConfig, saveService, loadConfig, openInExplorer, debugInfo,
     }
   }
 }

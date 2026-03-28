@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
+
 	"nssm-plus/internal/service"
 )
 
@@ -40,8 +42,9 @@ func (m *Manager) SaveToFile(filePath string, configs []service.ServiceConfig) e
 //  1. New format: {"services": [...]}
 //  2. Bare array: [...]
 //  3. Old single-service format: {...}
-// For backward compat, if a config has separate appPath and arguments,
-// they are merged into a single appPath field.
+// For backward compat with old merged appPath format, if appPath contains
+// a space and arguments is empty, the first token is kept as appPath
+// and the rest is moved to arguments.
 func (m *Manager) LoadFromFile(filePath string) ([]service.ServiceConfig, error) {
 	data, err := os.ReadFile(filePath)
 	if err != nil {
@@ -70,11 +73,14 @@ func (m *Manager) LoadFromFile(filePath string) ([]service.ServiceConfig, error)
 		}
 	}
 
-	// Backward compat: merge separate appPath + arguments into single appPath
+	// Backward compat: if old config had merged appPath (contains space) and no arguments,
+	// split it — but only if appPath doesn't look like a simple unquoted exe name
 	for i := range configs {
-		if configs[i].Arguments != "" {
-			configs[i].AppPath = configs[i].AppPath + " " + configs[i].Arguments
-			configs[i].Arguments = ""
+		if configs[i].Arguments == "" && configs[i].AppPath != "" {
+			if idx := strings.Index(configs[i].AppPath, " "); idx >= 0 {
+				configs[i].Arguments = configs[i].AppPath[idx+1:]
+				configs[i].AppPath = configs[i].AppPath[:idx]
+			}
 		}
 	}
 
