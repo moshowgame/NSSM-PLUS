@@ -239,11 +239,14 @@ npm run dev
 ## 使用方法
 
 1. **以管理员身份运行** `nssm-plus.exe`
-2. 点击 **Open Config** 加载多服务配置文件（或直接填写表单创建新服务）
+2. 点击 **Open Config** 加载多服务配置文件（或点击 **New Config** 直接填写表单创建新服务）
 3. 侧栏会显示已安装服务和文件中未安装的服务（带 "File" 标签）
-4. 点击侧栏服务查看/编辑配置，点击 **Install Service** 安装
-5. 使用 **Start / Stop / Restart** 控制服务运行
-6. 点击 **Save Config** 将所有已管理服务保存到一份 JSON 文件
+4. 点击侧栏服务查看/编辑配置，点击 **Install** 安装
+5. 已安装服务可通过 **Reconfigure** 重新配置（自动停止→修改→启动）
+6. 使用 **Start / Stop / Restart** 控制服务运行
+7. **Uninstall** 卸载服务，**Delete** 仅清空当前表单
+8. 点击 **Save Config** 将所有已管理服务保存到一份 JSON 文件
+9. 点击 **Debug** 输出调试信息到控制台（按 F12 查看）
 
 配置文件示例参见 [`configs/example.json`](configs/example.json)。
 
@@ -362,6 +365,7 @@ err := wails.Run(&options.App{
 - **WebView2**：目标机器必须有 WebView2 Runtime（Win11 已内置）
 - **服务标记**：`[NSSM-Plus]` 前缀是识别已管理服务的唯一标记，修改 `nssmPlusMarker` 常量会影响已有服务的识别
 - **Wails 绑定**：`app.go` 中的方法参数/返回值必须是可 JSON 序列化的类型，不支持 `chan`、`func`、`unsafe.Pointer` 等
+- **服务删除状态**：卸载服务时，如果遇到 "marked for deletion" 提示，说明该服务已被系统标记为待删除状态（可能由上一次卸载操作残留）。此时服务状态会变为 `Stopped` + `Disabled`，**重启计算机后该服务将被自动彻底删除**，无需手动干预
 
 ## 与 NSSM 的对比
 

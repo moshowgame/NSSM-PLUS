@@ -3,6 +3,7 @@ package service
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/svc"
@@ -12,6 +13,9 @@ import (
 const (
 	// Service marker to identify NSSM Plus managed services
 	nssmPlusMarker = "NSSM-Plus"
+
+	// Windows SERVICE_NO_CHANGE: tells ChangeServiceConfig not to modify this field
+	serviceNoChange = 0xFFFFFFFF
 )
 
 // ServiceConfig holds all configuration for a Windows service
@@ -102,28 +106,29 @@ func (m *Manager) Install(cfg ServiceConfig) error {
 		return fmt.Errorf("service '%s' already exists. Use Modify to update it", cfg.ServiceName)
 	}
 
-	// Build exe path with arguments
-	exePath := fmt.Sprintf(`"%s"`, cfg.AppPath)
-	args := []string{}
+	// Build binary path: AppPath contains the full command line (e.g. "java -server -jar app.jar")
+	binaryPath := cfg.AppPath
 	if cfg.Arguments != "" {
-		exePath = fmt.Sprintf(`"%s" %s`, cfg.AppPath, cfg.Arguments)
-		args = strings.Fields(cfg.Arguments)
+		binaryPath = cfg.AppPath + " " + cfg.Arguments
 	}
+	// Quote the executable part if it contains spaces
+	binaryPath = quoteExeInCmdLine(binaryPath)
 
 	// Create service
 	s, err := scMgr.CreateService(
 		cfg.ServiceName,
-		exePath,
+		binaryPath,
 		mgr.Config{
+			ServiceType:      windows.SERVICE_WIN32_OWN_PROCESS,
+			StartType:        toMgrStartType(cfg.StartType),
+			ErrorControl:     windows.SERVICE_ERROR_NORMAL,
+			BinaryPathName:   binaryPath,
 			DisplayName:      cfg.DisplayName,
 			Description:      buildDescription(cfg.Description, cfg.AppPath),
-			StartType:        toMgrStartType(cfg.StartType),
-			BinaryPathName:   exePath,
 			ServiceStartName: cfg.Account,
 			Password:         cfg.Password,
 			Dependencies:     cfg.Dependencies,
 		},
-		args...,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to create service: %w", err)
@@ -145,22 +150,42 @@ func (m *Manager) Remove(serviceName string) error {
 	if err != nil {
 		return fmt.Errorf("failed to open service '%s': %w", serviceName, err)
 	}
-	defer s.Close()
 
-	// Stop the service first if it's running
+	// Stop the service first if it's running, then wait for it to fully stop
 	status, err := s.Query()
 	if err != nil {
+		s.Close()
 		return fmt.Errorf("failed to query service status: %w", err)
 	}
-	if status.State == svc.Running {
+	if status.State != svc.Stopped {
 		_, err = s.Control(svc.Stop)
 		if err != nil {
-			return fmt.Errorf("failed to stop service before removal: %w", err)
+			if !strings.Contains(err.Error(), "not been started") &&
+				!strings.Contains(err.Error(), "not running") {
+				s.Close()
+				return fmt.Errorf("failed to stop service before removal: %w", err)
+			}
+		}
+		// Wait for the service to fully stop (up to 15 seconds)
+		for i := 0; i < 30; i++ {
+			time.Sleep(500 * time.Millisecond)
+			st, err := s.Query()
+			if err != nil {
+				break
+			}
+			if st.State == svc.Stopped {
+				break
+			}
 		}
 	}
 
+	// Delete must be called before closing the handle, but close immediately after
 	err = s.Delete()
+	s.Close()
 	if err != nil {
+		if strings.Contains(err.Error(), "marked for deletion") {
+			return fmt.Errorf("service '%s' is already marked for deletion (will be removed on next restart or after handles are released)", serviceName)
+		}
 		return fmt.Errorf("failed to delete service: %w", err)
 	}
 
@@ -311,19 +336,21 @@ func (m *Manager) Modify(oldName string, cfg ServiceConfig) error {
 	}
 	defer s.Close()
 
-	// Build exe path with arguments
-	exePath := cfg.AppPath
+	// Build binary path: AppPath contains the full command line (e.g. "java -server -jar app.jar")
+	binaryPath := cfg.AppPath
 	if cfg.Arguments != "" {
-		exePath = fmt.Sprintf(`"%s" %s`, cfg.AppPath, cfg.Arguments)
-	} else {
-		exePath = fmt.Sprintf(`"%s"`, cfg.AppPath)
+		binaryPath = cfg.AppPath + " " + cfg.Arguments
 	}
+	// Quote the executable part if it contains spaces
+	binaryPath = quoteExeInCmdLine(binaryPath)
 
 	err = s.UpdateConfig(mgr.Config{
+		ServiceType:      serviceNoChange,
+		StartType:        toMgrStartType(cfg.StartType),
+		ErrorControl:     serviceNoChange,
+		BinaryPathName:   binaryPath,
 		DisplayName:      cfg.DisplayName,
 		Description:      buildDescription(cfg.Description, cfg.AppPath),
-		StartType:        toMgrStartType(cfg.StartType),
-		BinaryPathName:   exePath,
 		ServiceStartName: cfg.Account,
 		Password:         cfg.Password,
 		Dependencies:     cfg.Dependencies,
@@ -358,7 +385,7 @@ func (m *Manager) GetServiceConfig(serviceName string) (*ServiceConfig, error) {
 		ServiceName: serviceName,
 		DisplayName: cfg.DisplayName,
 		Description: cleanDescription(cfg.Description),
-		AppPath:     cfg.BinaryPathName,
+		AppPath:     stripOuterQuotes(cfg.BinaryPathName),
 		StartType:   startTypeToString(cfg.StartType),
 		Account:     cfg.ServiceStartName,
 	}
@@ -421,4 +448,81 @@ func cleanDescription(description string) string {
 		return rest
 	}
 	return description
+}
+
+// quoteExeInCmdLine quotes the executable part of a command line if it contains spaces.
+// e.g. "C:\Program Files\app.exe --port 8080" -> "\"C:\Program Files\app.exe\" --port 8080"
+// e.g. "java -server -jar app.jar" -> "java -server -jar app.jar" (no change)
+func quoteExeInCmdLine(cmdLine string) string {
+	cmdLine = strings.TrimSpace(cmdLine)
+	if cmdLine == "" {
+		return ""
+	}
+
+	var exe string
+	var rest string
+
+	if strings.HasPrefix(cmdLine, `"`) {
+		// Already quoted — keep as-is
+		endQuote := strings.Index(cmdLine[1:], `"`)
+		if endQuote >= 0 {
+			return cmdLine
+		}
+		// Unclosed quote, take as-is
+		return cmdLine
+	}
+
+	// Split on first space
+	idx := strings.Index(cmdLine, " ")
+	if idx < 0 {
+		exe = cmdLine
+	} else {
+		exe = cmdLine[:idx]
+		rest = cmdLine[idx:]
+	}
+
+	// Quote the exe if it contains spaces and isn't already quoted
+	if strings.Contains(exe, " ") && !strings.HasPrefix(exe, `"`) {
+		exe = `"` + exe + `"`
+	}
+
+	if rest == "" {
+		return exe
+	}
+	return exe + rest
+}
+
+// stripOuterQuotes removes surrounding quotes from a path string.
+// Windows SCM may store BinaryPathName as "java" -jar app.jar,
+// this strips the outer quotes to get: java -jar app.jar
+func stripOuterQuotes(s string) string {
+	s = strings.TrimSpace(s)
+	if len(s) >= 2 && s[0] == '"' && s[len(s)-1] == '"' {
+		return s[1 : len(s)-1]
+	}
+	return s
+}
+
+// parseBinaryPathName splits BinaryPathName into appPath and arguments.
+// BinaryPathName format: "C:\path\app.exe" --arg1 --arg2
+func parseBinaryPathName(binaryPathName string) (appPath string, arguments string) {
+	binaryPathName = strings.TrimSpace(binaryPathName)
+	if binaryPathName == "" {
+		return "", ""
+	}
+	// If quoted, extract the quoted part as appPath
+	if strings.HasPrefix(binaryPathName, `"`) {
+		endQuote := strings.Index(binaryPathName[1:], `"`)
+		if endQuote >= 0 {
+			appPath = binaryPathName[1 : endQuote+1]
+			arguments = strings.TrimSpace(binaryPathName[endQuote+2:])
+			return appPath, arguments
+		}
+	}
+	// No quotes — split on first space
+	idx := strings.Index(binaryPathName, " ")
+	if idx >= 0 {
+		return binaryPathName[:idx], strings.TrimSpace(binaryPathName[idx+1:])
+	}
+	return binaryPathName, ""
 }
