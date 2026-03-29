@@ -554,6 +554,9 @@ export default {
       try {
         const status = await call('GetServiceStatus', name)
         showToast(`Service "${name}" exists, status: ${status}`, 'success')
+        selectedService.value = name
+        selectedServiceSource.value = 'installed'
+        isEditing.value = true
       } catch (e) {
         showToast(`Service "${name}" does not exist: ${errorMsg(e)}`, 'warning')
       }
