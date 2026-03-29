@@ -130,7 +130,8 @@ func (a *App) OpenInExplorer(filePath string) error {
 	if filePath == "" {
 		return fmt.Errorf("no file path specified")
 	}
-	cmd := exec.Command("explorer.exe", "/select,"+filePath)
+	// Use cmd /c to ensure proper argument passing to explorer.exe
+	cmd := exec.Command("cmd", "/c", "explorer.exe", "/select,"+filePath)
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-	return cmd.Start()
+	return cmd.Run()
 }

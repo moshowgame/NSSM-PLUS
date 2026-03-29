@@ -2,6 +2,7 @@ package service
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"syscall"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/svc"
 	"golang.org/x/sys/windows/svc/mgr"
+	"nssm-plus/internal/wrapper"
 )
 
 const (
@@ -109,15 +111,25 @@ func (m *Manager) Install(cfg ServiceConfig) error {
 		return fmt.Errorf("service '%s' already exists. Use Modify to update it", cfg.ServiceName)
 	}
 
-	// Build binary path: simple concatenation, no automatic quoting or escaping.
-	// Bypass mgr.CreateService to avoid syscall.EscapeArg mangling the path.
-	binaryPath := strings.TrimSpace(cfg.AppPath)
-	args := strings.TrimSpace(cfg.Arguments)
-	if args != "" {
-		binaryPath = binaryPath + " " + args
+	// Save wrapper config to ProgramData
+	wrapperCfg := &wrapper.WrapperConfig{
+		AppPath:   strings.TrimSpace(cfg.AppPath),
+		Arguments: strings.TrimSpace(cfg.Arguments),
+		WorkDir:   strings.TrimSpace(cfg.WorkDir),
+		Env:       cfg.Environment,
+	}
+	if err := wrapper.SaveConfig(cfg.ServiceName, wrapperCfg); err != nil {
+		return fmt.Errorf("failed to save wrapper config: %w", err)
 	}
 
-	// Create service via windows.CreateService directly
+	// Build BinaryPathName: point to current exe as service wrapper
+	exePath, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("failed to get executable path: %w", err)
+	}
+	binaryPath := wrapper.GetWrapperBinaryPath(exePath, cfg.ServiceName)
+
+	// Create service
 	desc := buildDescription(cfg.Description, cfg.AppPath)
 	h, err := windows.CreateService(
 		scMgr.Handle,
@@ -198,6 +210,9 @@ func (m *Manager) Remove(serviceName string) error {
 		}
 		return fmt.Errorf("failed to delete service: %w", err)
 	}
+
+	// Clean up wrapper config
+	wrapper.DeleteConfig(serviceName)
 
 	return nil
 }
@@ -323,7 +338,17 @@ func (m *Manager) ListServices() ([]ServiceInfo, error) {
 			DisplayName: cfg.DisplayName,
 			Status:      statusToString(status.State),
 			StartType:   startTypeToString(cfg.StartType),
-			AppPath:     cfg.BinaryPathName,
+		}
+		// Show real AppPath for wrapper services
+		if wrapper.IsWrapperBinaryPath(cfg.BinaryPathName) {
+			svcName := wrapper.ExtractServiceName(cfg.BinaryPathName)
+			if svcName != "" && wrapper.ConfigExists(svcName) {
+				if wCfg, err := wrapper.LoadConfig(svcName); err == nil {
+					info.AppPath = wCfg.AppPath
+				}
+			}
+		} else {
+			info.AppPath = cfg.BinaryPathName
 		}
 		result = append(result, info)
 		s.Close()
@@ -352,6 +377,17 @@ func (m *Manager) Modify(oldName string, cfg ServiceConfig) error {
 	args := strings.TrimSpace(cfg.Arguments)
 	if args != "" {
 		binaryPath = binaryPath + " " + args
+	}
+
+	// Update wrapper config
+	wrapperCfg := &wrapper.WrapperConfig{
+		AppPath:   strings.TrimSpace(cfg.AppPath),
+		Arguments: strings.TrimSpace(cfg.Arguments),
+		WorkDir:   strings.TrimSpace(cfg.WorkDir),
+		Env:       cfg.Environment,
+	}
+	if err := wrapper.SaveConfig(oldName, wrapperCfg); err != nil {
+		return fmt.Errorf("failed to update wrapper config: %w", err)
 	}
 
 	err = s.UpdateConfig(mgr.Config{
@@ -398,7 +434,23 @@ func (m *Manager) GetServiceConfig(serviceName string) (*ServiceConfig, error) {
 		StartType:   startTypeToString(cfg.StartType),
 		Account:     cfg.ServiceStartName,
 	}
-	// Split BinaryPathName into AppPath and Arguments
+
+	// If this is a wrapper-managed service, read appPath/arguments from wrapper config
+	if wrapper.IsWrapperBinaryPath(cfg.BinaryPathName) {
+		svcName := wrapper.ExtractServiceName(cfg.BinaryPathName)
+		if svcName != "" && wrapper.ConfigExists(svcName) {
+			wCfg, err := wrapper.LoadConfig(svcName)
+			if err == nil {
+				result.AppPath = wCfg.AppPath
+				result.Arguments = wCfg.Arguments
+				result.WorkDir = wCfg.WorkDir
+				result.Environment = wCfg.Env
+				return result, nil
+			}
+		}
+	}
+
+	// Fallback: parse BinaryPathName directly (for non-wrapped services)
 	result.AppPath, result.Arguments = parseBinaryPathName(cfg.BinaryPathName)
 
 	return result, nil
