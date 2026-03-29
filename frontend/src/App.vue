@@ -81,11 +81,11 @@
             </div>
             <div class="form-group">
               <label>Display Name</label>
-              <input v-model="config.displayName" placeholder="My Service" />
+              <input v-model="config.displayName" placeholder="My Service" @focus="autoFillFromServiceName('displayName')" />
             </div>
             <div class="form-group full-width">
               <label>Description</label>
-              <textarea v-model="config.description" rows="2" placeholder="Service description"></textarea>
+              <textarea v-model="config.description" rows="2" placeholder="Service description" @focus="autoFillFromServiceName('description')"></textarea>
             </div>
           </div>
         </div>
@@ -651,6 +651,12 @@ export default {
       showToast('Debug info output to console (press F12)', 'info')
     }
 
+    function autoFillFromServiceName(field) {
+      if (config.serviceName && !config[field]) {
+        config[field] = config.serviceName
+      }
+    }
+
     onMounted(() => {
       refreshServices()
     })
@@ -662,6 +668,7 @@ export default {
       statusClass, refreshServices, selectService, copyService,
       installNewService, reconfigureService, startService, stopService, restartService, removeService,
       newConfig, deleteConfig, checkService, saveConfig, saveService, loadConfig, openInExplorer, debugInfo,
+      autoFillFromServiceName,
     }
   }
 }

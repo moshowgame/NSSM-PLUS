@@ -41,7 +41,7 @@
 
 ```
 nssm-plus/
-├── main.go                       # Wails 入口，窗口配置、资源嵌入
+├── main.go                       # 入口：检测 service 模式 / 启动 Wails GUI
 ├── app.go                        # 前后端桥接层，暴露给前端的 Go 方法
 ├── go.mod / go.sum               # Go 模块依赖
 ├── wails.json                    # Wails 项目配置
@@ -49,6 +49,9 @@ nssm-plus/
 ├── internal/                     # 后端核心逻辑（不直接暴露给前端）
 │   ├── service/
 │   │   └── manager.go            # Windows SCM 服务管理（安装/删除/启停/查询/修改）
+│   ├── wrapper/
+│   │   ├── config.go             # Wrapper 配置文件管理（ProgramData 持久化）
+│   │   └── wrapper.go            # Windows 服务包装器（进程托管/日志/停止）
 │   └── config/
 │       └── config.go             # 配置文件序列化（JSON 导入/导出）
 │
@@ -73,35 +76,82 @@ nssm-plus/
 
 ## 架构设计
 
+### 整体架构
+
 ```
-┌─────────────────────────────────────────────────────┐
-│                   WebView2 窗口                       │
-│  ┌─────────────────────────────────────────────────┐ │
-│  │              Vue 3 前端 (App.vue)                │ │
-│  │  ┌──────────┐  ┌────────────┐  ┌──────────────┐  │ │
-│  │  │ 服务列表  │  │ 配置表单    │  │  操作按钮栏   │  │ │
-│  │  └────┬─────┘  └─────┬──────┘  └──────┬───────┘  │ │
-│  └───────┼──────────────┼───────────────┼───────────┘ │
-│          │  window.go.main.App  (Wails 自动生成桥接)  │
-├──────────┼──────────────────────────────────────────┤
-│  Go 后端  │                                          │
-│  ┌───────┴──────────┐  ┌────────────────────────┐   │
-│  │    app.go         │  │  main.go               │   │
-│  │  前后端绑定方法    │  │  Wails 窗口初始化       │   │
-│  │  InstallService() │  │  embed frontend/dist   │   │
-│  │  StartService()   │  └────────────────────────┘   │
-│  │  StopService()    │                                │
-│  │  ...              │                                │
-│  └────┬─────────┬───┘                                │
-│       │         │                                     │
-│  ┌────┴────┐ ┌─┴──────┐                              │
-│  │ service │ │ config  │                              │
-│  │ manager │ │ manager │                              │
-│  │ (SCM)   │ │ (JSON)  │                              │
-│  └─────────┘ └────────┘                              │
-├─────────────────────────────────────────────────────┤
-│              Windows Service Control Manager          │
-└─────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────┐
+│                     WebView2 窗口                            │
+│  ┌─────────────────────────────────────────────────────────┐ │
+│  │              Vue 3 前端 (App.vue)                       │ │
+│  │  ┌──────────┐  ┌────────────┐  ┌──────────────┐        │ │
+│  │  │ 服务列表  │  │ 配置表单    │  │  操作按钮栏   │        │ │
+│  │  └────┬─────┘  └─────┬──────┘  └──────┬───────┘        │ │
+│  └───────┼──────────────┼───────────────┼───────────────────┘ │
+│          │  window.go.main.App  (Wails 自动生成桥接)          │
+├──────────┼──────────────────────────────────────────────────┤
+│  Go 后端  │                                                   │
+│  ┌───────┴──────────┐  ┌────────────────────────┐            │
+│  │    app.go         │  │  main.go               │            │
+│  │  前后端绑定方法    │  │  ┌─ service 模式检测    │            │
+│  │  InstallService() │  │  │  nssm-plus.exe        │            │
+│  │  StartService()   │  │  │    service MySvc     │            │
+│  │  ...              │  │  │  → wrapper.Run()     │            │
+│  └────┬─────────┬───┘  │  ├─ GUI 模式（默认）     │            │
+│       │         │       │  │  → wails.Run()       │            │
+│  ┌────┴────┐ ┌─┴───┐   │  └──────────────────────┘            │
+│  │ service │ │config│   └────────────────────────┘             │
+│  │ manager │ │      │                                         │
+│  │ (SCM)   │ │(JSON)│                                         │
+│  └────┬────┘ └──────┘                                         │
+│       │                                                        │
+│  ┌────┴──────────┐                                             │
+│  │    wrapper     │  ← 服务包装器核心                          │
+│  │  config.go     │  WrapperConfig → ProgramData/NSSM-Plus/   │
+│  │  wrapper.go    │  svc.Handler → 启动/监控/停止子进程         │
+│  └───────────────┘                                             │
+├───────────────────────────────────────────────────────────────┤
+│                   Windows Service Control Manager              │
+└───────────────────────────────────────────────────────────────┘
+```
+
+### 服务包装器（Wrapper）机制
+
+NSSM Plus 的核心设计借鉴了 NSSM 的 Wrapper 模式。由于 `java.exe`、`node.exe` 等程序本身不是 Windows 服务，无法直接被 SCM 管理，因此 NSSM Plus 采用**自托管包装器**方案：
+
+```
+启动流程:
+  SCM → nssm-plus.exe service MyService → 读取配置 → 启动子进程 → 监控
+
+停止流程:
+  SCM → STOP 信号 → taskkill /T /PID (优雅停止) → 5s 超时 → taskkill /F /T /PID (强制)
+```
+
+**工作原理**：
+1. 安装服务时，SCM 的 `BinaryPathName` 指向 `nssm-plus.exe` 自身，格式为：`"<exePath>" service <ServiceName>`
+2. 服务启动时，`main.go` 检测到 `service` 参数，调用 `wrapper.Run()` 进入服务模式
+3. Wrapper 实现 `svc.Handler` 接口，读取 `ProgramData/NSSM-Plus/services/<name>.json` 中的配置
+4. 使用 `exec.Command` 启动目标子进程（如 `java -jar app.jar`），将 stdout/stderr 重定向到日志文件
+5. 进入事件循环，响应 SCM 的 Stop/Shutdown 信号，通过 `taskkill /T /PID` 终止子进程树
+
+**数据存储路径**：
+```
+%ProgramData%\NSSM-Plus\
+├── services\           # 每个服务的独立配置文件
+│   ├── MyService.json
+│   └── AnotherService.json
+└── logs\               # 子进程输出日志
+    ├── MyService.log
+    └── AnotherService.log
+```
+
+**Wrapper 配置结构**（`internal/wrapper/config.go`）：
+```go
+type WrapperConfig struct {
+    AppPath   string            `json:"appPath"`   // 应用程序路径
+    Arguments string            `json:"arguments"` // 启动参数
+    WorkDir   string            `json:"workDir"`   // 工作目录
+    Env       map[string]string `json:"env"`       // 环境变量
+}
 ```
 
 ### 前后端通信
@@ -117,15 +167,20 @@ window.go.main.App.GetInstalledServices()   // 获取服务列表
 
 所有在 `app.go` 中定义的 `App` 结构体的公开方法，只要参数和返回值是可序列化类型，都会自动暴露给前端。
 
-### 服务标记机制
+### 服务识别机制
 
-NSSM Plus 通过在服务的 Description 字段中添加 `[NSSM-Plus]` 前缀来标记自己管理的服务：
+NSSM Plus 通过两个维度识别自己管理的服务：
 
-```
-Description: "[NSSM-Plus] My web application service"
-```
+1. **Description 标记**：服务的 Description 字段中添加 `[NSSM-Plus]` 前缀
+   ```
+   Description: "[NSSM-Plus] My web application service"
+   ```
+2. **Wrapper BinaryPathName**：BinaryPathName 包含 ` service ` 关键字，指向 `nssm-plus.exe` 自身
+   ```
+   BinaryPathName: "C:\path\to\nssm-plus.exe" service MyService
+   ```
 
-`ListServices()` 会枚举系统所有服务，只返回带有此标记的服务，从而与系统自带服务区分。
+`ListServices()` 会枚举系统所有服务，通过 Description 标记筛选。对于 Wrapper 服务，`GetServiceConfig()` 和 `ListServices()` 会从 `ProgramData/NSSM-Plus/services/` 读取真实的应用路径和参数，而非显示 wrapper 的 BinaryPathName。
 
 ### 配置数据结构
 
@@ -247,7 +302,6 @@ npm run dev
 7. **Uninstall** 卸载服务，**Delete** 仅清空当前表单
 8. 点击 **Save Config** 将所有已管理服务保存到一份 JSON 文件
 9. 点击 **Debug** 输出调试信息到控制台（按 F12 查看）
-10. 需要始终对 AppPath 加引号，防止 SCM 对整个字符串加引号。
 
 配置文件示例参见 [`configs/example.json`](configs/example.json)。
 
@@ -272,9 +326,9 @@ npm run dev
 **常见修改场景**：
 
 - **增加服务配置字段**：在 `ServiceConfig` 结构体中添加字段，然后在 `Install()` 和 `Modify()` 中将新字段写入 `mgr.Config`
-- **添加日志重定向**：实现 stdout/stderr 管道捕获，将子进程输出写入日志文件（当前 `LogStdout`/`LogStderr` 仅保存路径，尚未实际重定向）
-- **实现崩溃重启**：监听服务进程退出事件，按 `RestartDelay` 延迟后重新启动
-- **使用 wrapper 模式**：像 NSSM 一样，编译一个独立的 wrapper 二进制来托管目标应用，而非直接指向目标 exe
+- **自定义日志路径**：当前日志固定输出到 `%ProgramData%\NSSM-Plus\logs\`，可在 `WrapperConfig` 中增加 `LogPath` 字段，并修改 `wrapper.go` 的日志重定向逻辑
+- **实现崩溃重启**：在 `wrapper.go` 的 `Execute()` 方法中，当子进程非正常退出时，按 `RestartDelay` 延迟后重新启动
+- **修改停止策略**：当前使用 `taskkill /T /PID`（优雅 5s + 强制），可在 `stopProcess()` 函数中调整超时时间和终止策略
 
 ### 2. 添加新的前后端桥接方法
 
@@ -376,21 +430,35 @@ err := wails.Run(&options.App{
 | 配置界面 | Tab 页切换 (5+ 个 Tab) | 单页面，无需切换 |
 | 配置迁移 | 无内置支持 | 多服务 JSON 文件统一管理 |
 | 界面语言 | 英文 | 可扩展多语言 |
-| 服务包装 | Wrapper 二进制托管进程 | 直接指向目标程序 |
-| 日志重定向 | 支持 stdout/stderr 捕获 | 字段已预留（待实现） |
+| 服务包装 | Wrapper 二进制托管进程 | 自托管 Wrapper 模式（同一可执行文件） |
+| 日志重定向 | 支持 stdout/stderr 捕获 | 已实现，输出到 `%ProgramData%\NSSM-Plus\logs\` |
 | 崩溃重启 | 内置 | 字段已预留（待实现） |
+| 进程停止 | 直接终止 | 优雅停止（taskkill /T）+ 强制终止（5s 超时后 taskkill /F） |
+| 环境变量 | 支持 | 已实现，通过 WrapperConfig.Env 注入 |
+| 工作目录 | 支持 | 已实现，通过 WrapperConfig.WorkDir 设置 |
+| BinaryPathName | `nssm.exe` 指向目标程序 | 自身 exe 作为 Wrapper，避免 `syscall.EscapeArg` 问题 |
 | 跨平台 | 仅 Windows | 仅 Windows |
+
+## 已完成功能
+
+以下是服务包装器核心功能的实现状态：
+
+- [x] **服务包装器架构** - `internal/wrapper/` 模块，实现 `svc.Handler` 接口
+- [x] **日志重定向** - 子进程 stdout/stderr 输出到 `%ProgramData%\NSSM-Plus\logs\<name>.log`
+- [x] **环境变量注入** - 通过 `WrapperConfig.Env` 在启动子进程时注入自定义环境变量
+- [x] **工作目录设置** - 通过 `WrapperConfig.WorkDir` 设置子进程的 `cwd`
+- [x] **优雅停止** - 先 `taskkill /T /PID`（5s 超时），再 `taskkill /F /T /PID` 强制终止
+- [x] **Wrapper 配置持久化** - `ProgramData/NSSM-Plus/services/<name>.json` 独立存储
+- [x] **进程树终止** - 通过 `/T` 参数终止子进程及其所有衍生进程（如 java.exe → 子线程）
+- [x] **控制台调试模式** - 非服务环境下可直接运行 wrapper 进行调试
+- [x] **原生文件对话框** - 使用 Wails 的 `runtime.SaveFileDialog` / `runtime.OpenFileDialog`
+- [x] **DisplayName/Description 自动填充** - 输入 ServiceName 后点击对应字段自动填充
 
 ## 待完成功能
 
-以下是当前版本中字段已定义但逻辑尚未完整实现的功能，可作为后续开发的切入点：
-
-- [ ] **日志重定向** - `LogStdout` / `LogStderr` 字段已定义，需实现 wrapper 模式捕获子进程输出
 - [ ] **日志轮转** - `RotateLog` 字段已定义，需实现按大小/日期切割日志文件
-- [ ] **崩溃重启** - `RestartDelay` / `RestartTimeout` 字段已定义，需实现进程监控和自动重启
-- [ ] **环境变量注入** - `Environment` 字段已定义，需在启动子进程时设置
-- [ ] **工作目录** - `WorkDir` 字段已定义，需在启动时设置 `cwd`
-- [x] **原生文件对话框** - 使用 Wails 的 `runtime.SaveFileDialog` / `runtime.OpenFileDialog` 替代浏览器弹窗
+- [ ] **崩溃自动重启** - `RestartDelay` / `RestartTimeout` 字段已定义，需实现进程监控和自动重启
+- [ ] **自定义日志路径** - `LogStdout` / `LogStderr` 字段已定义，当前固定输出到 ProgramData，需支持自定义路径
 - [ ] **服务重命名** - 当前 `Modify` 不支持更改服务名称
 - [ ] **多语言支持 (i18n)** - UI 文本硬编码为中文/英文混合
 - [ ] **系统托盘** - 最小化到系统托盘，后台运行
