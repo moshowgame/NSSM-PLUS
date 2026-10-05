@@ -239,19 +239,19 @@ func stopProcess(pid int, done <-chan error, timeoutSec int) {
 
 	cmd := exec.Command("taskkill", "/T", "/PID", fmt.Sprintf("%d", pid))
 	if err := cmd.Run(); err != nil {
-		log.Printf("[%s] Graceful kill signal failed: %v", pid, err)
+		log.Printf("[wrapper] Graceful kill signal for PID %d failed: %v", pid, err)
 	} else {
 		log.Printf("[wrapper] stopProcess: taskkill /T /PID %d sent successfully", pid)
 	}
 
 	select {
 	case <-done:
-		log.Printf("[%s] Process exited gracefully", pid)
+		log.Printf("[wrapper] Process (PID %d) exited gracefully", pid)
 	case <-time.After(time.Duration(timeoutSec) * time.Second):
-		log.Printf("[%s] Graceful shutdown timed out after %ds, force killing...", pid, timeoutSec)
+		log.Printf("[wrapper] PID %d graceful shutdown timed out after %ds, force killing...", pid, timeoutSec)
 		cmd = exec.Command("taskkill", "/F", "/T", "/PID", fmt.Sprintf("%d", pid))
 		if err := cmd.Run(); err != nil {
-			log.Printf("[%s] Force kill failed: %v", pid, err)
+			log.Printf("[wrapper] Force kill of PID %d failed: %v", pid, err)
 		}
 		<-done
 	}

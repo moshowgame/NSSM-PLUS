@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -30,8 +31,12 @@ Commands:
   edit <name> [options]      Edit service configuration
   list [--json]              List all NSSM Plus managed services
   log <name> [--lines N]     Show service log (last N lines)
-  export [name] [--output F] Export service config(s) to JSON file
-  import <file>              Import service config(s) from JSON file
+  export [name] [--output F] [--dir D] Export service config(s) to a JSON
+                             bundle file, or split into per-service files
+                             with --dir
+  import <file|dir>          Import service config(s) from a JSON bundle
+                             file or a directory of per-service config files;
+                             configs are written to the config directory
   help                       Show this help message
 
 Install options:
@@ -64,6 +69,7 @@ Examples:
   nssm-plus list --json
   nssm-plus log MyService --lines 50
   nssm-plus export --output services.json
+  nssm-plus export --dir "%ProgramData%\\NSSM-Plus\\configs"
   nssm-plus import services.json
 `
 
@@ -125,7 +131,7 @@ func Run(args []string) {
 
 func runInstall(mgr *service.Manager, args []string) {
 	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "Error: service name is required\n")
+		fmt.Fprintln(os.Stderr, "Error: service name is required")
 		fmt.Fprintln(os.Stderr, "Usage: nssm-plus install <name> --app <path> [options]")
 		os.Exit(1)
 	}
@@ -583,6 +589,7 @@ func runLog(mgr *service.Manager, args []string) {
 func runExport(mgr *service.Manager, args []string) {
 	var targetName string
 	outputFile := ""
+	outputDir := ""
 
 	for i := 0; i < len(args); i++ {
 		if !strings.HasPrefix(args[i], "-") && targetName == "" {
@@ -594,10 +601,17 @@ func runExport(mgr *service.Manager, args []string) {
 			}
 		} else if strings.HasPrefix(args[i], "--output=") {
 			outputFile = args[i][9:]
+		} else if args[i] == "--dir" || args[i] == "-d" {
+			i++
+			if i < len(args) {
+				outputDir = args[i]
+			}
+		} else if strings.HasPrefix(args[i], "--dir=") {
+			outputDir = args[i][6:]
 		}
 	}
 
-	log.Printf("[cli] export: target=%q, output=%q", targetName, outputFile)
+	log.Printf("[cli] export: target=%q, output=%q, dir=%q", targetName, outputFile, outputDir)
 
 	var configs []service.ServiceConfig
 
@@ -636,6 +650,26 @@ func runExport(mgr *service.Manager, args []string) {
 
 	log.Printf("[cli] export: exporting %d service(s)", len(configs))
 
+	// --dir mode: write one single-service config file per service
+	if outputDir != "" {
+		cfgMgr := config.NewManager()
+		exported := 0
+		for _, cfg := range configs {
+			if err := cfgMgr.SaveServiceTo(outputDir, cfg); err != nil {
+				log.Printf("[cli] export: failed to write config for %q: %v", cfg.ServiceName, err)
+				fmt.Fprintf(os.Stderr, "Warning: failed to export '%s': %v\n", cfg.ServiceName, err)
+				continue
+			}
+			exported++
+		}
+		if exported == 0 {
+			fmt.Fprintln(os.Stderr, "Error: no service config could be written")
+			os.Exit(1)
+		}
+		fmt.Printf("Exported %d/%d service config(s) to directory %s\n", exported, len(configs), outputDir)
+		return
+	}
+
 	if outputFile == "" {
 		data, err := json.MarshalIndent(config.ConfigFile{Services: configs}, "", "  ")
 		if err != nil {
@@ -657,30 +691,55 @@ func runExport(mgr *service.Manager, args []string) {
 
 func runImport(mgr *service.Manager, args []string) {
 	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "Error: config file path is required")
-		fmt.Fprintln(os.Stderr, "Usage: nssm-plus import <file>")
+		fmt.Fprintln(os.Stderr, "Error: config file or directory path is required")
+		fmt.Fprintln(os.Stderr, "Usage: nssm-plus import <file|dir>")
 		os.Exit(1)
 	}
 
-	filePath := args[0]
-	log.Printf("[cli] import: file=%q", filePath)
+	path := args[0]
+	log.Printf("[cli] import: path=%q", path)
 
 	cfgMgr := config.NewManager()
 
-	configs, err := cfgMgr.LoadFromFile(filePath)
+	var configs []service.ServiceConfig
+
+	info, err := os.Stat(path)
 	if err != nil {
-		log.Printf("[cli] import: failed to load config from %q: %v", filePath, err)
+		log.Printf("[cli] import: failed to stat %q: %v", path, err)
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
 
+	if info.IsDir() {
+		files, err := cfgMgr.LoadDir(path)
+		if err != nil {
+			log.Printf("[cli] import: failed to load config dir %q: %v", path, err)
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		for _, f := range files {
+			if f.Error != "" {
+				fmt.Fprintf(os.Stderr, "Warning: skipping %s: %s\n", filepath.Base(f.FilePath), f.Error)
+				continue
+			}
+			configs = append(configs, f.Config)
+		}
+	} else {
+		configs, err = cfgMgr.LoadFromFile(path)
+		if err != nil {
+			log.Printf("[cli] import: failed to load config from %q: %v", path, err)
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+	}
+
 	if len(configs) == 0 {
-		log.Printf("[cli] import: no service configurations found in %q", filePath)
-		fmt.Fprintln(os.Stderr, "No service configurations found in file")
+		log.Printf("[cli] import: no service configurations found in %q", path)
+		fmt.Fprintln(os.Stderr, "No service configurations found")
 		os.Exit(1)
 	}
 
-	log.Printf("[cli] import: found %d service(s) in config file", len(configs))
+	log.Printf("[cli] import: found %d service(s)", len(configs))
 
 	installed := 0
 	for _, cfg := range configs {
@@ -694,6 +753,13 @@ func runImport(mgr *service.Manager, args []string) {
 		}
 		if cfg.StartType == "" {
 			cfg.StartType = "auto"
+		}
+
+		// Persist the per-service config file first so the service shows up
+		// in the config directory view even if the install itself fails.
+		if err := cfgMgr.SaveService(cfg); err != nil {
+			log.Printf("[cli] import: failed to save config file for %q: %v", cfg.ServiceName, err)
+			fmt.Fprintf(os.Stderr, "Warning: failed to save config file for '%s': %v\n", cfg.ServiceName, err)
 		}
 
 		log.Printf("[cli] import: installing service %q (app=%q)", cfg.ServiceName, cfg.AppPath)

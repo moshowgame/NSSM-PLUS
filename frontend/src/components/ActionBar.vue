@@ -4,13 +4,13 @@
       <button class="btn-secondary" @click="$emit('new')">
         <span class="icon">+</span> {{ t('action.newConfig') }}
       </button>
-      <button class="btn-secondary" @click="$emit('load')">
-        <span class="icon">&#x1F4C2;</span> {{ t('action.openConfig') }}
+      <button class="btn-secondary" @click="$emit('import')">
+        <span class="icon">&#x1F4C2;</span> {{ t('action.importConfig') }}
       </button>
-      <button class="btn-secondary" @click="$emit('save')">
-        <span class="icon">&#x1F4BE;</span> {{ t('action.saveConfig') }}
+      <button class="btn-secondary" @click="$emit('export')">
+        <span class="icon">&#x1F4BE;</span> {{ t('action.exportConfig') }}
       </button>
-      <button class="btn-primary" @click="$emit('save-service')" :disabled="!isEditing || !configFilePath">
+      <button class="btn-primary" @click="$emit('save-service')" :disabled="!isEditing || !config.serviceName">
         <span class="icon">&#x1F4C4;</span> {{ t('action.saveService') }}
       </button>
     </div>
@@ -51,10 +51,9 @@ export default {
   props: {
     config: { type: Object, required: true },
     isEditing: { type: Boolean, default: false },
-    configFilePath: { type: String, default: '' },
     source: { type: String, default: '' },
   },
-  emits: ['new', 'load', 'save', 'save-service', 'install', 'reconfigure', 'start', 'stop', 'restart', 'check', 'uninstall', 'delete'],
+  emits: ['new', 'import', 'export', 'save-service', 'install', 'reconfigure', 'start', 'stop', 'restart', 'check', 'uninstall', 'delete'],
   setup() {
     const { t } = useI18n()
     return { t }

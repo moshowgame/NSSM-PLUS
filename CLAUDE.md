@@ -43,7 +43,7 @@ main.go
   ├── app.go (Wails bindings; all public methods auto-exposed to frontend)
   │     ├── internal/service/manager.go   — SCM operations (Install/Remove/Start/Stop/Modify/List)
   │     │     └── internal/wrapper/       — persistence and splitArgs helper
-  │     └── internal/config/config.go     — Multi-service JSON file I/O
+  │     └── internal/config/config.go     — per-service config files in ProgramData\NSSM-Plus\configs + multi-service JSON import/export
   │           └── internal/dpapi/dpapi.go — Windows DPAPI password encrypt/decrypt
   ├── internal/cli/cli.go                 — CLI arg parsing
   └── internal/wrapper/wrapper.go         — svc.Handler, process lifecycle, graceful/force kill
@@ -59,14 +59,23 @@ Services are identified by a `[NSSM-Plus]` prefix in the Description field, set 
 
 Single-component Vue 3 app (`frontend/src/App.vue`). Calls backend via `window.go.main.App.MethodName(...)`. Wails generates the JS bindings from `app.go`'s public methods at build time.
 
-### Config file formats
+### Config file model
 
-`internal/config/config.go` handles three backward-compatible JSON formats:
-1. `{"services": [...]}` — current multi-service format
+There are two distinct config stores under `%ProgramData%\NSSM-Plus\`:
+
+- **`configs\<serviceName>.json`** — the authoritative per-service config files (one single `ServiceConfig` object per file). Scanned at startup via `Manager.LoadDir()`; written by `SaveService()` / removed by `DeleteService()`. `app.go` persists them automatically on Install/Modify, and deletes the old file on rename. Files that fail to parse, have a filename mismatching their `serviceName`, or duplicate another file's `serviceName` come back with `ServiceFile.Error` set and never block the other files.
+- **`services\<serviceName>.json`** — the runtime wrapper config (`WrapperConfig`, app path/args/env/log/restart) read by `internal/wrapper` when SCM starts a service. Not user-facing.
+
+`internal/config/config.go` also handles the legacy multi-service JSON bundle formats for import/export (`LoadFromFile` / `SaveToFile`):
+1. `{"services": [...]}` — multi-service bundle
 2. `[...]` — bare array
 3. `{...}` — legacy single-service object
 
 Passwords are encrypted with Windows DPAPI when saved to file, decrypted when loaded.
+
+### Frontend
+
+Single-component Vue 3 app (`frontend/src/App.vue`). Calls backend via `window.go.main.App.MethodName(...)`. Wails generates the JS bindings from `app.go`'s public methods at build time. The frontend state is directory-based: `serviceFiles` (raw `LoadConfigDir` result) → `loadedServices` (valid configs) and `configErrors` (broken files, shown as a ⚠ badge in the header); **Import Config** splits a legacy bundle into per-service files, **Export Config** aggregates them back.
 
 ## Key constraints
 

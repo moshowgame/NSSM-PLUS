@@ -95,7 +95,10 @@ nssm-plus/
 │   └── appicon.png               # 应用图标
 │
 ├── configs/
-│   └── example.json              # 示例服务配置文件
+│   ├── example.json              # 旧版多服务格式示例（用于 Import Config）
+│   └── examples/                 # 新版单服务格式示例（每服务一个文件）
+│       ├── MyAppService.json
+│       └── AnotherService.json
 │
 └── .gitignore
 ```
@@ -241,26 +244,32 @@ type ServiceConfig struct {
 
 该结构体同时用于 JSON 配置文件存储和前后端数据传输。
 
-配置文件以多服务格式存储，一个 JSON 文件包含所有服务定义：
+### 配置文件模型：单服务单文件 + 配置目录集中管理
+
+自 v0.4 起，配置改为**每个服务一个独立 JSON 文件**，统一存放在配置目录 `%ProgramData%\NSSM-Plus\configs\`，文件名为 `<serviceName>.json`：
+
+```
+%ProgramData%\NSSM-Plus\configs\
+├── MyAppService.json      # MyAppService 的完整 ServiceConfig
+└── AnotherService.json    # AnotherService 的完整 ServiceConfig
+```
 
 ```json
 {
-  "services": [
-    {
-      "serviceName": "MyAppService",
-      "appPath": "C:\\path\\to\\app.exe",
-      ...
-    },
-    {
-      "serviceName": "AnotherService",
-      "appPath": "C:\\path\\to\\another.exe",
-      ...
-    }
-  ]
+  "serviceName": "MyAppService",
+  "appPath": "C:\\path\\to\\app.exe",
+  "arguments": "--port 8080",
+  ...
 }
 ```
 
-加载配置文件后，侧栏会合并显示已安装服务（带状态）和文件中的未安装服务（标记为 "Not Installed" + "File" 标签），可逐个点击查看并安装。向后兼容旧的单服务格式和裸数组格式。
+这一模型的特点：
+
+- **互相隔离**：单个配置文件损坏、被删或改名不影响其他服务的加载；无法解析的文件会在界面上以 ⚠ 徽章提示，其余服务照常工作。
+- **集中管理**：应用启动时自动扫描整个配置目录，侧栏合并显示已安装服务（带状态）和配置文件中的未安装服务（标记为 "Not Installed" + "File" 标签）。
+- **自动落盘**：通过 GUI 或 CLI 安装/修改服务时，配置会自动写入对应的服务配置文件，配置目录始终是配置的权威来源。
+- **改名迁移**：服务改名后旧配置文件会被自动删除，避免残留。
+- **旧格式兼容**：多服务合并 JSON（`{"services": [...]}`、裸数组、旧单服务对象）仍可通过 **Import Config** / `nssm-plus import` 导入——导入时自动拆分为每服务一个文件。多服务格式也用于 **Export Config** / `nssm-plus export` 的聚合导出。示例参见 [`configs/example.json`](configs/example.json)（旧格式）与 [`configs/examples/`](configs/examples/)（新格式）。
 
 ## 环境要求
 
@@ -343,15 +352,16 @@ npm run dev
 
 ### GUI 模式
 
-1. **以管理员身份运行** `nssm-plus.exe`
-2. 点击 **Open Config** 加载多服务配置文件（或点击 **New Config** 直接填写表单创建新服务）
-3. 侧栏会显示已安装服务和文件中未安装的服务（带 "File" 标签）
-4. 点击侧栏服务查看/编辑配置，点击 **Install** 安装
+1. **以管理员身份运行** `nssm-plus.exe`，应用自动扫描配置目录 `%ProgramData%\NSSM-Plus\configs\`（每服务一个 `<serviceName>.json`）
+2. 点击 **New Config** 直接填写表单创建新服务，或点击 **Import Config** 导入旧版多服务 JSON（自动拆分为单服务文件）
+3. 侧栏会显示已安装服务和配置目录中的未安装服务（带 "File" 标签）
+4. 点击侧栏服务查看/编辑配置，点击 **Install** 安装（配置自动落盘到配置目录）
 5. 已安装服务可通过 **Reconfigure** 重新配置（自动停止→修改→启动）
 6. 使用 **Start / Stop / Restart** 控制服务运行
-7. **Uninstall** 卸载服务，**Delete** 仅清空当前表单
-8. 点击 **Save Config** 将所有已管理服务保存到一份 JSON 文件
-9. 点击 **Debug** 输出调试信息到控制台（按 F12 查看）
+7. **Uninstall** 卸载服务（保留配置文件，便于重新安装），**Delete** 删除配置文件本身
+8. 编辑后点击 **Save Service** 将当前服务保存到 `<serviceName>.json`（改名会自动删除旧文件）
+9. 点击 **Export Config** 将配置目录中的所有服务聚合导出为一份多服务 JSON（可再导入）
+10. 点击 **Debug** 输出调试信息到控制台（按 F12 查看）
 
 ### CLI 模式
 
@@ -384,10 +394,12 @@ nssm-plus list --json
 nssm-plus log MyService
 nssm-plus log MyService --lines 100
 
-# 导入/导出
-nssm-plus export --output services.json
+# 导入/导出（导入会同时写入配置目录的单服务文件）
+nssm-plus export --output services.json          # 聚合导出为多服务 JSON
 nssm-plus export MyService --output myservice.json
-nssm-plus import services.json
+nssm-plus export --dir "C:\backup\configs"       # 拆分导出为每服务一个文件
+nssm-plus import services.json                   # 导入多服务 JSON（自动拆分落盘）
+nssm-plus import "C:\backup\configs"             # 导入整个配置文件目录
 
 # 删除服务
 nssm-plus remove MyService
@@ -481,11 +493,11 @@ const logs = await call('GetServiceLogs', serviceName)
 
 **文件**: `internal/config/config.go`
 
-当前使用 JSON 格式。如需改用 YAML/TOML：
+当前使用 JSON 格式，核心入口：`SaveServiceTo` / `LoadDir`（单服务文件）与 `SaveToFile` / `LoadFromFile`（多服务聚合导入导出）。如需改用 YAML/TOML：
 
 1. 安装对应库：`go get gopkg.in/yaml.v3`
 2. 替换 `json.MarshalIndent` / `json.Unmarshal` 为 YAML/TOML 的序列化方法
-3. 更新 `configs/example.json` 的格式和扩展名
+3. 更新 `configs/example.json` 与 `configs/examples/` 的格式和扩展名
 
 ### 5. 窗口配置
 

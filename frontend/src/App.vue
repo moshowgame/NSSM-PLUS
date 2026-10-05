@@ -21,16 +21,19 @@
           >{{ t('lang.zh') }}</button>
         </div>
         <span class="header-sep"></span>
-        <template v-if="configFilePath">
-          <span class="config-file-label" :title="configFilePath">
-            &#x1F4C4; {{ configFilePath.split(/[\\/]/).pop() }}
+        <template v-if="configDir">
+          <span class="config-file-label" :title="configDir">
+            &#x1F4C2; {{ configDirLabel }}
+          </span>
+          <span v-if="configErrors.length" class="config-error-badge" :title="configErrorTitles">
+            &#x26A0;&#xFE0F; {{ configErrors.length }}
           </span>
           <span v-if="dirty" class="dirty-indicator" :title="t('app.unsaved')">&#x25CF;</span>
           <button class="btn-sm btn-secondary" @click="openInExplorer" title="Open in File Explorer">
             &#x1F4C2;
           </button>
         </template>
-        <span class="header-sep" v-if="configFilePath"></span>
+        <span class="header-sep" v-if="configDir"></span>
         <a class="header-link" href="https://zhengkai.blog.csdn.net/" target="_blank" title="CSDN Blog">
           <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M3.5 8.4a1.4 1.4 0 0 0-1.4 1.4v4.2a1.4 1.4 0 0 0 1.4 1.4h1.4a1.4 1.4 0 0 0 1.4-1.4V9.8a1.4 1.4 0 0 0-1.4-1.4H3.5zm7.7-4.2a1.4 1.4 0 0 0-1.4 1.4v8.4a1.4 1.4 0 0 0 1.4 1.4h1.4a1.4 1.4 0 0 0 1.4-1.4V5.6a1.4 1.4 0 0 0-1.4-1.4h-1.4zm7.7 2.8a1.4 1.4 0 0 0-1.4 1.4v5.6a1.4 1.4 0 0 0 1.4 1.4h1.4a1.4 1.4 0 0 0 1.4-1.4V8.4a1.4 1.4 0 0 0-1.4-1.4h-1.4z"/></svg>
           CSDN
@@ -63,11 +66,10 @@
     <ActionBar
       :config="config"
       :is-editing="isEditing"
-      :config-file-path="configFilePath"
       :source="selectedServiceSource"
       @new="newConfig"
-      @load="loadConfig"
-      @save="saveConfig"
+      @import="importConfig"
+      @export="exportConfig"
       @save-service="saveService"
       @install="installNewService"
       @reconfigure="reconfigureService"
@@ -114,22 +116,36 @@ export default {
 
     // State
     const services = ref([])
-    const loadedServices = ref([])
+    const serviceFiles = ref([])
     const syncStates = ref({})
     const orphans = ref([])
-    const configFilePath = ref('')
+    const configDir = ref('')
     const selectedService = ref('')
     const selectedServiceSource = ref('')
     const isEditing = ref(false)
     const dirty = ref(false)
-    const STORAGE_CONFIG_KEY = 'nssm-plus-last-config'
     let autoRefreshTimer = null
 
+    // Config directory model: one single-service config file per service.
+    // serviceFiles is the raw scan result; files that fail to load carry an
+    // error and never affect the other files.
+    const loadedServices = computed(() => serviceFiles.value
+      .filter(f => !f.error)
+      .map(f => f.config))
+    const configErrors = computed(() => serviceFiles.value.filter(f => f.error))
+    const configDirLabel = computed(() => {
+      if (!configDir.value) return ''
+      const parts = configDir.value.split(/[\\/]/).filter(Boolean)
+      return parts.slice(-2).join('\\')
+    })
+    const configErrorTitles = computed(() => configErrors.value
+      .map(f => `${f.filePath}: ${f.error}`)
+      .join('\n'))
+
     // Merged service list for sidebar display.
-    // When a config file is loaded, only show services from that file (with real status if installed),
+    // Show services from the config directory (with real status if installed),
     // plus a per-service sync badge (synced/drifted) from the diff engine.
-    // When no config file is loaded, show all installed services.
-    // Orphan wrapper configs (config file without a registered service) are appended in both modes.
+    // Orphan wrapper configs (config file without a registered service) are appended.
     const displayServices = computed(() => {
       const installedMap = {}
       for (const svc of services.value) {
@@ -137,8 +153,8 @@ export default {
       }
 
       let items
-      if (configFilePath.value) {
-        // Config file mode: show only services from the file, enriched with real status
+      if (configDir.value) {
+        // Config directory mode: show services from config files, enriched with real status
         items = loadedServices.value.map(ls => {
           const installed = installedMap[ls.serviceName]
           const diff = syncStates.value[ls.serviceName]
@@ -164,7 +180,7 @@ export default {
           }
         })
       } else {
-        // No config file: show all installed NSSM-Plus services
+        // Config directory not loaded yet: show all installed NSSM-Plus services
         items = services.value.map(svc => ({
           name: svc.name,
           displayName: svc.displayName,
@@ -195,7 +211,7 @@ export default {
 
     // Field-level diff of the currently selected service (file vs registered)
     const currentSyncDiff = computed(() => {
-      if (!configFilePath.value) return null
+      if (!configDir.value) return null
       const d = syncStates.value[selectedService.value]
       if (!d || d.state !== 'drifted' || !d.fields || !d.fields.length) return null
       return d
@@ -322,7 +338,7 @@ export default {
 
     // Service operations
     async function refreshSyncStates() {
-      if (!configFilePath.value || !loadedServices.value.length) {
+      if (!configDir.value || !loadedServices.value.length) {
         syncStates.value = {}
         return
       }
@@ -347,10 +363,13 @@ export default {
         } catch (e) {
           services.value = []
         }
-        // If config file is loaded, also reload it for up-to-date config data
-        if (configFilePath.value) {
-          const configs = await call('LoadConfigFromFile', configFilePath.value)
-          loadedServices.value = configs || []
+        // Scan the config directory for per-service config files
+        if (configDir.value) {
+          try {
+            serviceFiles.value = (await call('LoadConfigDir')) || []
+          } catch (e) {
+            serviceFiles.value = []
+          }
         }
         // Refresh sync badges (file vs registered) and orphan wrapper configs
         await refreshSyncStates()
@@ -485,9 +504,8 @@ export default {
         async () => {
           try {
             await call('RemoveService', name)
-            const snapshot = JSON.parse(JSON.stringify(config))
-            loadedServices.value = loadedServices.value.filter(s => s.serviceName !== name)
-            loadedServices.value.push(snapshot)
+            // The config file is kept on purpose: the service now shows as
+            // "Not Installed" and can be reinstalled or deleted from here.
             selectedServiceSource.value = 'file'
             showToast(t('toast.uninstalled'), 'success')
             await refreshServices()
@@ -512,13 +530,21 @@ export default {
       }
       showModal(
         t('action.delete'),
-        `Are you sure you want to delete "${name}"? This will remove the config entirely.`,
+        `Are you sure you want to delete "${name}"? This will remove the config file entirely.`,
         'btn-danger',
         async () => {
-          loadedServices.value = loadedServices.value.filter(s => s.serviceName !== name)
-          newConfig()
-          await refreshServices()
-          showToast(t('toast.deleted'), 'success')
+          try {
+            await call('DeleteServiceConfig', name)
+            Object.assign(config, defaultConfig())
+            selectedService.value = ''
+            selectedServiceSource.value = ''
+            isEditing.value = false
+            dirty.value = false
+            await refreshServices()
+            showToast(t('toast.deleted'), 'success')
+          } catch (e) {
+            showToast(t('toast.deleteFailed') + ': ' + errorMsg(e), 'error')
+          }
         }
       )
     }
@@ -565,10 +591,6 @@ export default {
         selectedServiceSource.value = ''
         isEditing.value = false
         dirty.value = false
-        loadedServices.value = []
-        configFilePath.value = ''
-        services.value = []
-        localStorage.removeItem(STORAGE_CONFIG_KEY)
       })
     }
 
@@ -587,72 +609,82 @@ export default {
     }
 
     // --- Config file operations ---
-    async function saveConfig() {
+
+    // Export every service config from the config directory into one
+    // multi-service JSON bundle file (legacy format, re-importable).
+    async function exportConfig() {
       try {
-        const defaultName = configFilePath.value ? configFilePath.value.split(/[\\/]/).pop() : 'services.json'
-        const filePath = await call('ShowSaveDialog', 'Save Config', defaultName)
-        if (!filePath) return
-        const current = JSON.parse(JSON.stringify(config))
-        const allConfigs = loadedServices.value
-          .filter(s => s.serviceName !== current.serviceName)
-        if (current.serviceName) {
-          allConfigs.unshift(current)
+        if (!loadedServices.value.length) {
+          showToast(t('toast.noConfigs'), 'warning')
+          return
         }
-        await call('SaveConfigToFile', filePath, allConfigs)
-        configFilePath.value = filePath
-        dirty.value = false
-        localStorage.setItem(STORAGE_CONFIG_KEY, filePath)
-        showToast(t('toast.saved', { count: allConfigs.length, file: filePath.split(/[\\/]/).pop() }), 'success')
+        const filePath = await call('ShowSaveDialog', t('action.exportConfig'), 'services.json')
+        if (!filePath) return
+        await call('SaveConfigToFile', filePath, loadedServices.value)
+        showToast(t('toast.saved', { count: loadedServices.value.length, file: filePath.split(/[\\/]/).pop() }), 'success')
       } catch (e) {
         showToast(t('toast.saveFailed') + ': ' + errorMsg(e), 'error')
       }
     }
 
+    // Save the currently edited service to its own config file. When the
+    // service was renamed, the old config file is removed by the backend.
     async function saveService() {
-      if (!configFilePath.value) {
-        showToast(t('toast.noConfigFile'), 'warning')
-        return
-      }
       if (!config.serviceName) {
         showToast(t('toast.nameRequired'), 'warning')
         return
       }
       try {
-        const current = JSON.parse(JSON.stringify(config))
-        const allConfigs = loadedServices.value
-          .filter(s => s.serviceName !== current.serviceName)
-        allConfigs.unshift(current)
-        await call('SaveConfigToFile', configFilePath.value, allConfigs)
-        loadedServices.value = allConfigs
+        const oldName = isEditing.value ? selectedService.value : ''
+        await call('SaveServiceConfig', oldName, JSON.parse(JSON.stringify(config)))
+        selectedService.value = config.serviceName
+        selectedServiceSource.value = 'file'
+        isEditing.value = true
         dirty.value = false
-        await refreshSyncStates()
-        showToast(t('toast.saved', { count: 1, file: configFilePath.value.split(/[\\/]/).pop() }), 'success')
+        await refreshServices()
+        showToast(t('toast.serviceSaved', { file: config.serviceName + '.json' }), 'success')
       } catch (e) {
         showToast(t('toast.saveFailed') + ': ' + errorMsg(e), 'error')
       }
     }
 
-    function loadConfig() {
+    // Import a legacy multi-service JSON bundle (or single-service object):
+    // each service is split into its own config file in the config directory.
+    async function importConfig() {
       guardAction(async () => {
         try {
-          const filePath = await call('ShowOpenDialog', 'Open Config File')
+          const filePath = await call('ShowOpenDialog', t('action.importConfig'))
           if (!filePath) return
           const configs = await call('LoadConfigFromFile', filePath)
           if (!configs || configs.length === 0) {
             showToast(t('toast.noConfigs'), 'warning')
             return
           }
+          let imported = 0
+          for (const cfg of configs) {
+            if (!cfg.serviceName) continue
+            try {
+              await call('SaveServiceConfig', '', cfg)
+              imported++
+            } catch (e) {
+              console.error('Failed to import service config:', cfg.serviceName, e)
+            }
+          }
+          if (imported === 0) {
+            showToast(t('toast.importFailed'), 'error')
+            return
+          }
           isEditing.value = false
-          Object.assign(config, configs[0])
-          loadedServices.value = configs
-          configFilePath.value = filePath
-          selectedService.value = configs[0].serviceName
-          selectedServiceSource.value = 'file'
-          isEditing.value = true
-          dirty.value = false
-          localStorage.setItem(STORAGE_CONFIG_KEY, filePath)
           await refreshServices()
-          showToast(t('toast.loaded', { count: configs.length, file: filePath.split(/[\\/]/).pop() }), 'success')
+          const first = loadedServices.value.find(s => configs.some(c => c.serviceName === s.serviceName))
+          if (first) {
+            Object.assign(config, first)
+            selectedService.value = first.serviceName
+            selectedServiceSource.value = 'file'
+            isEditing.value = true
+            dirty.value = false
+          }
+          showToast(t('toast.imported', { count: imported, file: filePath.split(/[\\/]/).pop() }), 'success')
         } catch (e) {
           showToast(t('toast.loadConfigFailed') + ': ' + errorMsg(e), 'error')
         }
@@ -660,9 +692,9 @@ export default {
     }
 
     async function openInExplorer() {
-      if (!configFilePath.value) return
+      if (!configDir.value) return
       try {
-        await call('OpenInExplorer', configFilePath.value)
+        await call('OpenInExplorer', configDir.value)
       } catch (e) {
         showToast(t('toast.fileOpenFailed') + ': ' + errorMsg(e), 'error')
       }
@@ -673,9 +705,9 @@ export default {
       console.log('Config:', JSON.parse(JSON.stringify(config)))
       console.log('Selected:', selectedService.value, '| Source:', selectedServiceSource.value)
       console.log('Installed Services:', JSON.parse(JSON.stringify(services.value)))
-      console.log('Loaded Services:', JSON.parse(JSON.stringify(loadedServices.value)))
+      console.log('Config Directory:', configDir.value)
+      console.log('Service Files:', JSON.parse(JSON.stringify(serviceFiles.value)))
       console.log('Display Services:', JSON.parse(JSON.stringify(displayServices.value)))
-      console.log('Config File:', configFilePath.value)
       console.groupEnd()
       showToast(t('toast.debugInfo'), 'info')
     }
@@ -687,24 +719,21 @@ export default {
     }
 
     onMounted(async () => {
-      const lastPath = localStorage.getItem(STORAGE_CONFIG_KEY)
-      if (lastPath) {
-        try {
-          const configs = await call('LoadConfigFromFile', lastPath)
-          if (configs && configs.length > 0) {
-            loadedServices.value = configs
-            configFilePath.value = lastPath
-            Object.assign(config, configs[0])
-            selectedService.value = configs[0].serviceName
-            selectedServiceSource.value = 'file'
-            isEditing.value = true
-            dirty.value = false
-          }
-        } catch (e) {
-          localStorage.removeItem(STORAGE_CONFIG_KEY)
-        }
+      try {
+        configDir.value = (await call('GetConfigDir')) || ''
+      } catch (e) {
+        configDir.value = ''
       }
       await refreshServices()
+      // Auto-select the first service from the config directory, if any
+      if (loadedServices.value.length) {
+        const first = loadedServices.value[0]
+        Object.assign(config, first)
+        selectedService.value = first.serviceName
+        selectedServiceSource.value = 'file'
+        isEditing.value = true
+        dirty.value = false
+      }
       autoRefreshTimer = setInterval(refreshServices, 10000)
     })
 
@@ -716,13 +745,14 @@ export default {
     })
 
     return {
-      services, loadedServices, displayServices, currentSyncDiff,
-      configFilePath, selectedService, selectedServiceSource,
+      services, serviceFiles, loadedServices, displayServices, currentSyncDiff,
+      configDir, configDirLabel, configErrors, configErrorTitles,
+      selectedService, selectedServiceSource,
       config, isEditing, dirty, toast, modal,
       locale, t, switchLang,
       refreshServices, selectService, copyService,
       installNewService, reconfigureService, startService, stopService, restartService, removeService,
-      newConfig, deleteConfig, checkService, saveConfig, saveService, loadConfig, openInExplorer, debugInfo,
+      newConfig, deleteConfig, checkService, exportConfig, saveService, importConfig, openInExplorer, debugInfo,
       browseAppPath, browseWorkDir,
       closeModal, guardAction,
     }
@@ -782,6 +812,15 @@ export default {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.config-error-badge {
+  font-size: 12px;
+  color: var(--warning);
+  background: var(--bg-hover);
+  padding: 3px 8px;
+  border-radius: var(--radius);
+  cursor: help;
 }
 
 .dirty-indicator {

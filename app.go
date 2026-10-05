@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"log"
 	"nssm-plus/internal/config"
 	"nssm-plus/internal/service"
 	"os"
@@ -34,11 +35,20 @@ func (a *App) startup(ctx context.Context) {
 
 // --- Service Operations ---
 
-// InstallService installs a new Windows service
+// InstallService installs a new Windows service and persists its config
+// file in the config directory.
 func (a *App) InstallService(cfg service.ServiceConfig) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return a.mgr.Install(cfg)
+	if err := a.mgr.Install(cfg); err != nil {
+		return err
+	}
+	// The service is registered at this point; a config persistence failure
+	// is logged but must not be reported as a failed install.
+	if err := a.config.SaveService(cfg); err != nil {
+		log.Printf("[app] InstallService: service installed but failed to save config file: %v", err)
+	}
+	return nil
 }
 
 // RemoveService removes an existing Windows service
@@ -79,11 +89,25 @@ func (a *App) GetInstalledServices() ([]service.ServiceInfo, error) {
 	return a.mgr.ListServices()
 }
 
-// ModifyService updates an existing service configuration
+// ModifyService updates an existing service configuration and persists the
+// config file in the config directory, moving the file when renamed.
 func (a *App) ModifyService(oldName string, cfg service.ServiceConfig) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return a.mgr.Modify(oldName, cfg)
+	if err := a.mgr.Modify(oldName, cfg); err != nil {
+		return err
+	}
+	// The service is updated at this point; a config persistence failure
+	// is logged but must not be reported as a failed modification.
+	if err := a.config.SaveService(cfg); err != nil {
+		log.Printf("[app] ModifyService: service updated but failed to save config file: %v", err)
+	}
+	if oldName != cfg.ServiceName {
+		if err := a.config.DeleteService(oldName); err != nil {
+			log.Printf("[app] ModifyService: failed to remove stale config file of %q: %v", oldName, err)
+		}
+	}
+	return nil
 }
 
 // GetServiceConfig retrieves the configuration of an existing service
@@ -174,6 +198,45 @@ func (a *App) SaveConfigToFile(filePath string, configs []service.ServiceConfig)
 // LoadConfigFromFile loads service configs from a multi-service JSON file
 func (a *App) LoadConfigFromFile(filePath string) ([]service.ServiceConfig, error) {
 	return a.config.LoadFromFile(filePath)
+}
+
+// --- Config Directory Operations (one single-service file per service) ---
+
+// GetConfigDir returns the directory holding the per-service config files.
+func (a *App) GetConfigDir() (string, error) {
+	return config.Dir(), nil
+}
+
+// LoadConfigDir loads every single-service config file from the config
+// directory. Files that fail to load are returned with Error set instead
+// of failing the whole call.
+func (a *App) LoadConfigDir() ([]config.ServiceFile, error) {
+	return a.config.LoadDir(config.Dir())
+}
+
+// SaveServiceConfig persists one service to its own <serviceName>.json file
+// in the config directory. When the service was renamed, oldName refers to
+// the previous name whose config file is removed after the new one is saved.
+func (a *App) SaveServiceConfig(oldName string, cfg service.ServiceConfig) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if err := a.config.SaveService(cfg); err != nil {
+		return err
+	}
+	if oldName != "" && oldName != cfg.ServiceName {
+		if err := a.config.DeleteService(oldName); err != nil {
+			log.Printf("[app] SaveServiceConfig: failed to remove stale config file of %q: %v", oldName, err)
+		}
+	}
+	return nil
+}
+
+// DeleteServiceConfig removes the config file of a service from the config
+// directory. The registered Windows service, if any, is not touched.
+func (a *App) DeleteServiceConfig(serviceName string) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.config.DeleteService(serviceName)
 }
 
 // OpenInExplorer opens Windows File Explorer and selects the specified file

@@ -1,0 +1,18 @@
+{
+  "serviceName": "AnotherService",
+  "displayName": "Another Application",
+  "description": "Second example: each service lives in its own config file",
+  "appPath": "C:\\path\\to\\another.exe",
+  "arguments": "",
+  "workDir": "",
+  "startType": "demand",
+  "account": "",
+  "password": "",
+  "environment": {},
+  "logStdout": "",
+  "logStderr": "",
+  "rotateLog": false,
+  "restartDelay": 0,
+  "restartTimeout": 30,
+  "dependencies": []
+}
