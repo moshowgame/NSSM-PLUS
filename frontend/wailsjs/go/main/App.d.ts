@@ -4,9 +4,15 @@ import {service} from '../models';
 
 export function GetInstalledServices():Promise<Array<service.ServiceInfo>>;
 
+export function GetOrphanConfigs():Promise<Array<service.ServiceInfo>>;
+
 export function GetServiceConfig(arg1:string):Promise<service.ServiceConfig>;
 
 export function GetServiceStatus(arg1:string):Promise<string>;
+
+export function GetSyncStates(arg1:Array<service.ServiceConfig>):Promise<Array<service.ServiceDiff>>;
+
+export function GetWrapperConfig(arg1:string):Promise<service.ServiceConfig>;
 
 export function InstallService(arg1:service.ServiceConfig):Promise<void>;
 
@@ -22,10 +28,16 @@ export function RestartService(arg1:string):Promise<void>;
 
 export function SaveConfigToFile(arg1:string,arg2:Array<service.ServiceConfig>):Promise<void>;
 
+export function ShowOpenAppDialog(arg1:string):Promise<string>;
+
 export function ShowOpenDialog(arg1:string):Promise<string>;
+
+export function ShowOpenDirectoryDialog(arg1:string):Promise<string>;
 
 export function ShowSaveDialog(arg1:string,arg2:string):Promise<string>;
 
 export function StartService(arg1:string):Promise<void>;
 
 export function StopService(arg1:string):Promise<void>;
+
+export function ValidateAppPath(arg1:string):Promise<void>;

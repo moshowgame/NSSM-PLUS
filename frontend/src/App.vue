@@ -54,6 +54,7 @@
 
       <ConfigForm
         :config="config"
+        :sync-diff="currentSyncDiff"
         @browse-app="browseAppPath"
         @browse-dir="browseWorkDir"
       />
@@ -114,6 +115,8 @@ export default {
     // State
     const services = ref([])
     const loadedServices = ref([])
+    const syncStates = ref({})
+    const orphans = ref([])
     const configFilePath = ref('')
     const selectedService = ref('')
     const selectedServiceSource = ref('')
@@ -123,18 +126,22 @@ export default {
     let autoRefreshTimer = null
 
     // Merged service list for sidebar display.
-    // When a config file is loaded, only show services from that file (with real status if installed).
+    // When a config file is loaded, only show services from that file (with real status if installed),
+    // plus a per-service sync badge (synced/drifted) from the diff engine.
     // When no config file is loaded, show all installed services.
+    // Orphan wrapper configs (config file without a registered service) are appended in both modes.
     const displayServices = computed(() => {
       const installedMap = {}
       for (const svc of services.value) {
         installedMap[svc.name] = svc
       }
 
+      let items
       if (configFilePath.value) {
         // Config file mode: show only services from the file, enriched with real status
-        return loadedServices.value.map(ls => {
+        items = loadedServices.value.map(ls => {
           const installed = installedMap[ls.serviceName]
+          const diff = syncStates.value[ls.serviceName]
           if (installed) {
             return {
               name: installed.name,
@@ -143,6 +150,7 @@ export default {
               startType: installed.startType,
               appPath: installed.appPath || ls.appPath,
               source: 'installed',
+              syncState: diff && diff.state !== 'notInstalled' ? diff.state : '',
             }
           }
           return {
@@ -152,19 +160,45 @@ export default {
             startType: ls.startType || '-',
             appPath: ls.appPath,
             source: 'file',
+            syncState: '',
           }
         })
+      } else {
+        // No config file: show all installed NSSM-Plus services
+        items = services.value.map(svc => ({
+          name: svc.name,
+          displayName: svc.displayName,
+          status: svc.status,
+          startType: svc.startType,
+          appPath: svc.appPath,
+          source: 'installed',
+          syncState: '',
+        }))
       }
 
-      // No config file: show all installed NSSM-Plus services
-      return services.value.map(svc => ({
-        name: svc.name,
-        displayName: svc.displayName,
-        status: svc.status,
-        startType: svc.startType,
-        appPath: svc.appPath,
-        source: 'installed',
-      }))
+      // Append orphan wrapper configs, skipping names already listed above
+      const listed = new Set(items.map(i => i.name.toLowerCase()))
+      for (const o of orphans.value) {
+        if (listed.has(o.name.toLowerCase())) continue
+        items.push({
+          name: o.name,
+          displayName: o.displayName || o.name,
+          status: 'Orphan',
+          startType: '-',
+          appPath: o.appPath,
+          source: 'orphan',
+          syncState: '',
+        })
+      }
+      return items
+    })
+
+    // Field-level diff of the currently selected service (file vs registered)
+    const currentSyncDiff = computed(() => {
+      if (!configFilePath.value) return null
+      const d = syncStates.value[selectedService.value]
+      if (!d || d.state !== 'drifted' || !d.fields || !d.fields.length) return null
+      return d
     })
 
     const defaultConfig = () => ({
@@ -287,6 +321,23 @@ export default {
     }
 
     // Service operations
+    async function refreshSyncStates() {
+      if (!configFilePath.value || !loadedServices.value.length) {
+        syncStates.value = {}
+        return
+      }
+      try {
+        const diffs = (await call('GetSyncStates', loadedServices.value)) || []
+        const map = {}
+        for (const d of diffs) {
+          map[d.serviceName] = d
+        }
+        syncStates.value = map
+      } catch (e) {
+        syncStates.value = {}
+      }
+    }
+
     async function refreshServices() {
       try {
         // Always fetch installed services for status display
@@ -301,6 +352,13 @@ export default {
           const configs = await call('LoadConfigFromFile', configFilePath.value)
           loadedServices.value = configs || []
         }
+        // Refresh sync badges (file vs registered) and orphan wrapper configs
+        await refreshSyncStates()
+        try {
+          orphans.value = (await call('GetOrphanConfigs')) || []
+        } catch (e) {
+          orphans.value = []
+        }
       } catch (e) {
         showToast(t('toast.refreshFailed') + ': ' + errorMsg(e), 'error')
       }
@@ -314,6 +372,15 @@ export default {
           const cached = loadedServices.value.find(s => s.serviceName === svc.name)
           if (cached) {
             Object.assign(config, cached)
+          }
+        } else if (svc.source === 'orphan') {
+          try {
+            const cfg = await call('GetWrapperConfig', svc.name)
+            if (cfg) {
+              Object.assign(config, cfg)
+            }
+          } catch (e) {
+            showToast(t('toast.loadConfigFailed') + ': ' + errorMsg(e), 'error')
           }
         } else {
           try {
@@ -331,15 +398,6 @@ export default {
         dirty.value = false
         await refreshServices()
       })
-    }
-
-    function statusClass(status) {
-      switch (status) {
-        case 'Running': return 'status-running'
-        case 'Stopped': return 'status-stopped'
-        case 'Not Installed': return 'status-file'
-        default: return 'status-other'
-      }
     }
 
     async function installNewService() {
@@ -471,6 +529,16 @@ export default {
         if (cached) {
           Object.assign(config, cached)
         }
+      } else if (svc.source === 'orphan') {
+        try {
+          const cfg = await call('GetWrapperConfig', svc.name)
+          if (cfg) {
+            Object.assign(config, cfg)
+          }
+        } catch (e) {
+          showToast(t('toast.loadConfigFailed') + ': ' + errorMsg(e), 'error')
+          return
+        }
       } else {
         try {
           const cfg = await call('GetServiceConfig', svc.name)
@@ -557,6 +625,7 @@ export default {
         await call('SaveConfigToFile', configFilePath.value, allConfigs)
         loadedServices.value = allConfigs
         dirty.value = false
+        await refreshSyncStates()
         showToast(t('toast.saved', { count: 1, file: configFilePath.value.split(/[\\/]/).pop() }), 'success')
       } catch (e) {
         showToast(t('toast.saveFailed') + ': ' + errorMsg(e), 'error')
@@ -647,7 +716,7 @@ export default {
     })
 
     return {
-      services, loadedServices, displayServices,
+      services, loadedServices, displayServices, currentSyncDiff,
       configFilePath, selectedService, selectedServiceSource,
       config, isEditing, dirty, toast, modal,
       locale, t, switchLang,
@@ -766,277 +835,6 @@ export default {
 .header-link:hover {
   color: var(--accent);
   background: var(--bg-hover);
-}
-
-/* Sidebar */
-.sidebar {
-  width: 280px;
-  min-width: 280px;
-  background: var(--bg-secondary);
-  border-right: 1px solid var(--border);
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-
-.sidebar-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 12px 16px;
-  font-weight: 600;
-  font-size: 14px;
-  border-bottom: 1px solid var(--border);
-}
-
-.sidebar-actions {
-  display: flex;
-  gap: 6px;
-}
-
-.service-list {
-  flex: 1;
-  overflow-y: auto;
-  padding: 6px;
-}
-
-.service-item {
-  padding: 10px 12px;
-  border-radius: var(--radius);
-  cursor: pointer;
-  transition: background 0.15s;
-  margin-bottom: 2px;
-}
-.service-item:hover { background: var(--bg-hover); }
-.service-item:hover .btn-copy { opacity: 1; }
-.service-item.active { background: var(--bg-active); }
-
-.service-item-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 4px;
-}
-
-.service-item-info {
-  flex: 1;
-  min-width: 0;
-}
-
-.btn-copy {
-  opacity: 0;
-  transition: opacity 0.15s;
-  font-size: 14px;
-  padding: 2px 6px;
-  flex-shrink: 0;
-  background: transparent;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  color: var(--text-muted);
-  cursor: pointer;
-  line-height: 1;
-}
-.btn-copy:hover {
-  background: var(--bg-hover);
-  color: var(--accent);
-  border-color: var(--accent);
-}
-
-.service-item-name {
-  font-weight: 500;
-  margin-bottom: 4px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.source-badge {
-  font-size: 10px;
-  font-weight: 600;
-  padding: 1px 5px;
-  border-radius: 3px;
-  background: rgba(33, 150, 243, 0.2);
-  color: var(--info, #2196F3);
-}
-
-.service-item-meta {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 12px;
-}
-
-.status-badge {
-  padding: 1px 6px;
-  border-radius: 3px;
-  font-size: 11px;
-  font-weight: 600;
-}
-.status-running { background: rgba(76, 175, 80, 0.2); color: var(--success); }
-.status-stopped { background: rgba(244, 67, 54, 0.2); color: var(--danger); }
-.status-file { background: rgba(158, 158, 158, 0.2); color: var(--text-muted); }
-.status-other { background: rgba(255, 152, 0, 0.2); color: var(--warning); }
-.start-type { color: var(--text-muted); }
-
-.empty-state {
-  padding: 40px 20px;
-  text-align: center;
-  color: var(--text-muted);
-}
-.empty-state .hint {
-  font-size: 12px;
-  margin-top: 6px;
-}
-
-/* Main Content */
-.main-content {
-  flex: 1;
-  overflow-y: auto;
-  padding: 20px;
-}
-
-.form-section {
-  margin-bottom: 20px;
-  background: var(--bg-secondary);
-  border-radius: var(--radius);
-  padding: 16px 20px;
-  border: 1px solid var(--border);
-}
-
-.section-title {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--accent);
-  margin-bottom: 12px;
-  padding-bottom: 8px;
-  border-bottom: 1px solid var(--border);
-}
-
-.form-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 12px 16px;
-}
-
-.form-group {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-.form-group.full-width { grid-column: 1 / -1; }
-.form-group.two-thirds { grid-column: 1 / 3; }
-
-.form-group label {
-  font-size: 12px;
-  color: var(--text-secondary);
-  font-weight: 500;
-}
-
-.field-hint {
-  font-size: 11px;
-  color: var(--text-muted);
-  margin-top: 2px;
-}
-
-.form-group input,
-.form-group select,
-.form-group textarea {
-  width: 100%;
-}
-
-/* Input with browse button */
-.input-with-btn {
-  display: flex;
-  gap: 8px;
-  align-items: stretch;
-}
-.input-with-btn textarea,
-.input-with-btn input {
-  flex: 1;
-  min-width: 0;
-}
-.btn-browse {
-  align-self: flex-end;
-  flex-shrink: 0;
-  white-space: nowrap;
-}
-
-.checkbox-group label {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  cursor: pointer;
-  padding-top: 6px;
-}
-.checkbox-group input[type="checkbox"] {
-  width: 16px;
-  height: 16px;
-  accent-color: var(--accent);
-}
-
-/* KV Editor (Environment Variables) */
-.kv-editor {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-.kv-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-.kv-key {
-  flex: 2;
-  min-width: 0;
-}
-.kv-sep {
-  color: var(--text-muted);
-  font-weight: 600;
-  flex-shrink: 0;
-}
-.kv-val {
-  flex: 3;
-  min-width: 0;
-}
-
-/* Dependency Editor */
-.dep-editor {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-.dep-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-.dep-input {
-  flex: 1;
-  min-width: 0;
-}
-
-/* Action Bar */
-.action-bar {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 12px 20px;
-  background: var(--bg-secondary);
-  border-top: 1px solid var(--border);
-  flex-shrink: 0;
-}
-
-.action-left, .action-right {
-  display: flex;
-  gap: 8px;
-}
-
-button:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
 }
 
 /* Toast */

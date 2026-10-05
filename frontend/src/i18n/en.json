@@ -68,6 +68,18 @@
     "uninstall": "Uninstall",
     "delete": "Delete"
   },
+  "sync": {
+    "synced": "Synced",
+    "drifted": "Drifted",
+    "notInstalled": "Not Installed",
+    "orphaned": "Orphan Config",
+    "diffTitle": "Configuration Drift",
+    "diffHint": "Saved config file vs actually registered service. Unsaved form edits are not compared.",
+    "fileValue": "Config File",
+    "actualValue": "Registered",
+    "emptyValue": "(empty)",
+    "readError": "Read Error"
+  },
   "modal": {
     "cancel": "Cancel",
     "confirm": "Confirm",

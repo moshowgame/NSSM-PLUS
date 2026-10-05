@@ -91,6 +91,23 @@ func (a *App) GetServiceConfig(serviceName string) (*service.ServiceConfig, erro
 	return a.mgr.GetServiceConfig(serviceName)
 }
 
+// GetSyncStates reconciles file-based configs against the actually
+// registered services, returning per-service sync state and field diffs.
+func (a *App) GetSyncStates(configs []service.ServiceConfig) ([]service.ServiceDiff, error) {
+	return a.mgr.GetSyncStates(configs)
+}
+
+// GetOrphanConfigs lists wrapper configs that have no registered service.
+func (a *App) GetOrphanConfigs() ([]service.ServiceInfo, error) {
+	return a.mgr.GetOrphanConfigs()
+}
+
+// GetWrapperConfig loads the wrapper config of a service directly from disk,
+// without requiring the service to be registered.
+func (a *App) GetWrapperConfig(serviceName string) (*service.ServiceConfig, error) {
+	return a.mgr.GetWrapperConfig(serviceName)
+}
+
 // --- File Dialog Operations (via Wails Go runtime) ---
 
 // ShowOpenDialog opens a native Open File dialog filtered for JSON config files.

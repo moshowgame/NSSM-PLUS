@@ -68,6 +68,18 @@
     "uninstall": "卸载",
     "delete": "删除"
   },
+  "sync": {
+    "synced": "已同步",
+    "drifted": "已漂移",
+    "notInstalled": "未安装",
+    "orphaned": "孤儿配置",
+    "diffTitle": "配置漂移",
+    "diffHint": "对比已保存的配置文件与实际注册的服务，未保存的表单修改不参与对比。",
+    "fileValue": "配置文件",
+    "actualValue": "已注册服务",
+    "emptyValue": "（空）",
+    "readError": "读取错误"
+  },
   "modal": {
     "cancel": "取消",
     "confirm": "确认",

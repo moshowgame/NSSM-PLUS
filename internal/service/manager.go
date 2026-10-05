@@ -564,23 +564,29 @@ func (m *Manager) GetServiceConfig(serviceName string) (*ServiceConfig, error) {
 	}
 	defer s.Close()
 
+	return buildServiceConfig(s, serviceName)
+}
+
+// buildServiceConfig reads the full configuration from an open service
+// handle, combining SCM properties with the wrapper config when the
+// service is NSSM-Plus managed.
+func buildServiceConfig(s *mgr.Service, serviceName string) (*ServiceConfig, error) {
 	cfg, err := s.Config()
 	if err != nil {
-		log.Printf("[service] GetServiceConfig: failed to get config for '%s': %v", serviceName, err)
 		return nil, fmt.Errorf("failed to get service config: %w", err)
 	}
 
 	result := &ServiceConfig{
-		ServiceName: serviceName,
-		DisplayName: cfg.DisplayName,
-		Description: cleanDescription(cfg.Description),
-		StartType:   startTypeToString(cfg.StartType),
-		Account:     cfg.ServiceStartName,
+		ServiceName:  serviceName,
+		DisplayName:  cfg.DisplayName,
+		Description:  cleanDescription(cfg.Description),
+		StartType:    startTypeToString(cfg.StartType),
+		Account:      cfg.ServiceStartName,
+		Dependencies: cfg.Dependencies,
 	}
 
 	if wrapper.IsWrapperBinaryPath(cfg.BinaryPathName) {
 		svcName := wrapper.ExtractServiceName(cfg.BinaryPathName)
-		log.Printf("[service] GetServiceConfig: service '%s' is wrapper-managed, extractedName=%q", serviceName, svcName)
 		if svcName != "" && wrapper.ConfigExists(svcName) {
 			wCfg, err := wrapper.LoadConfig(svcName)
 			if err == nil {
@@ -593,15 +599,12 @@ func (m *Manager) GetServiceConfig(serviceName string) (*ServiceConfig, error) {
 				result.RotateLog = wCfg.RotateLog
 				result.RestartDelay = wCfg.RestartDelay
 				result.RestartTimeout = wCfg.RestartTimeout
-				log.Printf("[service] GetServiceConfig: loaded wrapper config for '%s' (appPath=%q)", serviceName, result.AppPath)
 				return result, nil
 			}
-			log.Printf("[service] GetServiceConfig: failed to load wrapper config for '%s': %v, falling back to BinaryPathName", svcName, err)
 		}
 	}
 
 	result.AppPath, result.Arguments = parseBinaryPathName(cfg.BinaryPathName)
-	log.Printf("[service] GetServiceConfig: parsed non-wrapper config for '%s' (appPath=%q)", serviceName, result.AppPath)
 	return result, nil
 }
 

@@ -36,7 +36,7 @@
       <button class="btn-danger" @click="$emit('uninstall')" :disabled="!isEditing || source !== 'installed'">
         {{ t('action.uninstall') }}
       </button>
-      <button class="btn-danger" @click="$emit('delete')" :disabled="!isEditing">
+      <button class="btn-danger" @click="$emit('delete')" :disabled="!isEditing || source === 'orphan'">
         {{ t('action.delete') }}
       </button>
     </div>
@@ -61,3 +61,29 @@ export default {
   },
 }
 </script>
+
+<style scoped>
+.action-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 20px;
+  background: var(--bg-secondary);
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.action-left, .action-right {
+  display: flex;
+  gap: 8px;
+}
+
+button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.icon {
+  font-size: 15px;
+}
+</style>

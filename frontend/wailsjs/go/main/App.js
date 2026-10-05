@@ -6,12 +6,24 @@ export function GetInstalledServices() {
   return window['go']['main']['App']['GetInstalledServices']();
 }
 
+export function GetOrphanConfigs() {
+  return window['go']['main']['App']['GetOrphanConfigs']();
+}
+
 export function GetServiceConfig(arg1) {
   return window['go']['main']['App']['GetServiceConfig'](arg1);
 }
 
 export function GetServiceStatus(arg1) {
   return window['go']['main']['App']['GetServiceStatus'](arg1);
+}
+
+export function GetSyncStates(arg1) {
+  return window['go']['main']['App']['GetSyncStates'](arg1);
+}
+
+export function GetWrapperConfig(arg1) {
+  return window['go']['main']['App']['GetWrapperConfig'](arg1);
 }
 
 export function InstallService(arg1) {
@@ -42,8 +54,16 @@ export function SaveConfigToFile(arg1, arg2) {
   return window['go']['main']['App']['SaveConfigToFile'](arg1, arg2);
 }
 
+export function ShowOpenAppDialog(arg1) {
+  return window['go']['main']['App']['ShowOpenAppDialog'](arg1);
+}
+
 export function ShowOpenDialog(arg1) {
   return window['go']['main']['App']['ShowOpenDialog'](arg1);
+}
+
+export function ShowOpenDirectoryDialog(arg1) {
+  return window['go']['main']['App']['ShowOpenDirectoryDialog'](arg1);
 }
 
 export function ShowSaveDialog(arg1, arg2) {
@@ -56,4 +76,8 @@ export function StartService(arg1) {
 
 export function StopService(arg1) {
   return window['go']['main']['App']['StopService'](arg1);
+}
+
+export function ValidateAppPath(arg1) {
+  return window['go']['main']['App']['ValidateAppPath'](arg1);
 }
